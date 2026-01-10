@@ -1,0 +1,11 @@
+name: AtomScribe
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    - PySide6>=6.6.0
+    - pydantic>=2.0
+    - loguru>=0.7.0
