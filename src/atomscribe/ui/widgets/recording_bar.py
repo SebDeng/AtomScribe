@@ -11,8 +11,10 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Slot, QTimer
 from PySide6.QtGui import QFont
+from loguru import logger
 
 from ...signals import get_app_signals
+from ...core.audio_recorder import get_audio_recorder, AudioDevice
 from .waveform import WaveformWidget
 
 
@@ -31,7 +33,7 @@ class RecordingBar(QWidget):
         self._is_recording = False
         self._is_paused = False
         self._elapsed_seconds = 0
-        self._audio_devices = []
+        self._audio_devices: list[AudioDevice] = []
 
         self._setup_ui()
         self._connect_signals()
@@ -206,93 +208,63 @@ class RecordingBar(QWidget):
         self._timer.timeout.connect(self._update_timer)
 
     def _populate_devices(self):
-        """Populate audio device dropdown with actual system microphones"""
+        """Populate audio device dropdown using sounddevice"""
         self.device_combo.clear()
         self._audio_devices = []
 
         try:
-            # Try to use Qt Multimedia to get audio devices
-            from PySide6.QtMultimedia import QMediaDevices, QAudioDevice
+            # Use the audio recorder's device detection
+            devices = get_audio_recorder().get_audio_devices()
 
-            audio_inputs = QMediaDevices.audioInputs()
-
-            if audio_inputs:
-                for device in audio_inputs:
-                    device_name = device.description()
+            if devices:
+                for device in devices:
                     self._audio_devices.append(device)
-                    # Mark default device
-                    if device == QMediaDevices.defaultAudioInput():
-                        self.device_combo.addItem(f"* {device_name}")
+                    # Mark default device with asterisk
+                    if device.is_default:
+                        self.device_combo.addItem(f"* {device.name}")
+                        # Select default device
+                        self.device_combo.setCurrentIndex(self.device_combo.count() - 1)
                     else:
-                        self.device_combo.addItem(device_name)
+                        self.device_combo.addItem(device.name)
             else:
                 self.device_combo.addItem("No microphones found")
-
-        except ImportError:
-            # Fallback if QtMultimedia is not available
-            self._populate_devices_fallback()
-
-    def _populate_devices_fallback(self):
-        """Fallback method to detect audio devices using pyaudio or system APIs"""
-        try:
-            import pyaudio
-            p = pyaudio.PyAudio()
-
-            default_device = p.get_default_input_device_info()
-            default_index = default_device.get('index', -1)
-
-            for i in range(p.get_device_count()):
-                device_info = p.get_device_info_by_index(i)
-                # Only show input devices
-                if device_info.get('maxInputChannels', 0) > 0:
-                    name = device_info.get('name', f'Device {i}')
-                    if i == default_index:
-                        self.device_combo.addItem(f"* {name}")
-                    else:
-                        self.device_combo.addItem(name)
-                    self._audio_devices.append(device_info)
-
-            p.terminate()
-
-            if self.device_combo.count() == 0:
-                self.device_combo.addItem("No microphones found")
+                logger.warning("No audio input devices found")
 
         except Exception as e:
-            # Ultimate fallback
-            self.device_combo.addItem("System Default Microphone")
-            self._audio_devices.append(None)
+            logger.error(f"Error populating audio devices: {e}")
+            self.device_combo.addItem("Error loading devices")
 
     def _on_device_changed(self, index: int):
         """Handle audio device selection change"""
         if 0 <= index < len(self._audio_devices):
             device = self._audio_devices[index]
-            if device:
-                try:
-                    device_name = device.description() if hasattr(device, 'description') else str(device.get('name', 'Unknown'))
-                    self.signals.audio_device_changed.emit(device_name)
-                except:
-                    pass
+            # Set the device on the audio recorder
+            get_audio_recorder().set_device(device.index)
+            logger.info(f"Selected audio device: {device.name} (index {device.index})")
+            self.signals.audio_device_changed.emit(device.name)
 
     @Slot()
     def _on_record_clicked(self):
         """Handle record button click"""
         if not self._is_recording:
-            self.signals.recording_started.emit()
+            # Emit button click signal - main window will show dialog
+            # Don't update UI yet - wait for recording_started signal
+            self.record_btn.setChecked(False)  # Reset button until confirmed
+            self.signals.record_button_clicked.emit()
         else:
-            self.signals.recording_stopped.emit()
+            # Clicking REC while recording = stop
+            self.signals.stop_button_clicked.emit()
 
     @Slot()
     def _on_pause_clicked(self):
         """Handle pause button click"""
-        if self._is_paused:
-            self.signals.recording_resumed.emit()
-        else:
-            self.signals.recording_paused.emit()
+        # Emit button click - actual state change happens via signals
+        self.signals.pause_button_clicked.emit()
 
     @Slot()
     def _on_stop_clicked(self):
         """Handle stop button click"""
-        self.signals.recording_stopped.emit()
+        self.signals.stop_button_clicked.emit()
 
     @Slot()
     def _on_recording_started(self):
@@ -306,6 +278,9 @@ class RecordingBar(QWidget):
         self.pause_btn.setEnabled(True)
         self.pause_btn.setText("Pause")
         self.stop_btn.setEnabled(True)
+
+        # Disable device selection during recording
+        self.device_combo.setEnabled(False)
 
         self.waveform.set_active(True)
         self._timer.start(1000)
@@ -324,10 +299,13 @@ class RecordingBar(QWidget):
         self.pause_btn.setText("Pause")
         self.stop_btn.setEnabled(False)
 
+        # Re-enable device selection
+        self.device_combo.setEnabled(True)
+
         self.waveform.set_active(False)
         self._timer.stop()
 
-        self.signals.status_message.emit("Recording stopped", 2000)
+        # Don't reset timer - keep showing final duration
 
     @Slot()
     def _on_recording_paused(self):
@@ -369,12 +347,19 @@ class RecordingBar(QWidget):
         self._elapsed_seconds = 0
         self.timer_label.setText("00:00:00")
 
-    def get_selected_device(self):
+    def get_selected_device(self) -> AudioDevice | None:
         """Get the currently selected audio device"""
         index = self.device_combo.currentIndex()
         if 0 <= index < len(self._audio_devices):
             return self._audio_devices[index]
         return None
+
+    def get_selected_device_index(self) -> int:
+        """Get the index of the currently selected device"""
+        index = self.device_combo.currentIndex()
+        if 0 <= index < len(self._audio_devices):
+            return self._audio_devices[index].index
+        return -1
 
     def refresh_devices(self):
         """Refresh the list of audio devices"""

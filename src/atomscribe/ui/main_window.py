@@ -10,11 +10,16 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QFrame,
+    QMessageBox,
+    QDialog,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QFont, QAction
+from loguru import logger
 
 from ..signals import get_app_signals
+from ..core.config import get_config_manager
+from ..core.recording_controller import get_recording_controller
 from .widgets.sidebar import SidebarWidget
 from .widgets.realtime_panel import RealtimePanel
 from .widgets.preview_panel import PreviewPanel
@@ -27,19 +32,26 @@ class MainWindow(QMainWindow):
 
     Layout:
     - Header bar with logo and actions
-    - Left sidebar with session list
+    - Recording bar
+    - Left sidebar with file browser
     - Right content area (realtime + preview panels)
-    - Bottom recording control bar
     - Status bar
     """
 
     def __init__(self):
         super().__init__()
         self.signals = get_app_signals()
+        self._config = get_config_manager()
+        self._recording_controller = get_recording_controller()
+
+        self._is_actually_recording = False  # Track real recording state
 
         self._setup_window()
         self._setup_ui()
         self._connect_signals()
+
+        # Check for first run after UI is set up
+        QTimer.singleShot(100, self._check_first_run)
 
     def _setup_window(self):
         """Configure window properties"""
@@ -185,7 +197,7 @@ class MainWindow(QMainWindow):
         status_bar.addWidget(QWidget(), stretch=1)
 
         # Session info (right)
-        self.session_label = QLabel("Session: Untitled")
+        self.session_label = QLabel("Session: None")
         status_bar.addPermanentWidget(self.session_label)
 
         # Separator
@@ -194,8 +206,23 @@ class MainWindow(QMainWindow):
         status_bar.addPermanentWidget(sep)
 
         # Storage info
-        self.storage_label = QLabel("2.3 GB available")
+        self.storage_label = QLabel("")
         status_bar.addPermanentWidget(self.storage_label)
+        self._update_storage_info()
+
+    def _update_storage_info(self):
+        """Update storage info in status bar"""
+        import shutil
+        save_dir = self._config.get_default_save_directory()
+        if save_dir and save_dir.exists():
+            try:
+                usage = shutil.disk_usage(save_dir)
+                free_gb = usage.free / (1024 ** 3)
+                self.storage_label.setText(f"{free_gb:.1f} GB available")
+            except:
+                self.storage_label.setText("")
+        else:
+            self.storage_label.setText("No save location set")
 
     def _connect_signals(self):
         """Connect application signals"""
@@ -208,15 +235,229 @@ class MainWindow(QMainWindow):
         signals.session_opened.connect(self._on_session_opened)
         signals.session_created.connect(self._on_session_created)
 
-        # Recording state changes
-        signals.recording_started.connect(self._on_recording_started)
-        signals.recording_stopped.connect(self._on_recording_stopped)
+        # Button click signals - user wants to start/stop/pause
+        signals.record_button_clicked.connect(self._handle_record_button_clicked)
+        signals.stop_button_clicked.connect(self._handle_stop_button_clicked)
+        signals.pause_button_clicked.connect(self._handle_pause_button_clicked)
+
+        # Recording saved - for reveal in explorer
+        signals.recording_saved.connect(self._on_recording_saved)
+
+        # Recording time updates
+        signals.recording_time_updated.connect(self._on_recording_time_updated)
+
+    def _check_first_run(self):
+        """Check if this is the first run and show setup dialog"""
+        if self._config.is_first_run():
+            logger.info("First run detected, showing setup dialog")
+            self._show_first_run_dialog()
+        else:
+            # Update sidebar with save directory
+            save_dir = self._config.get_default_save_directory()
+            if save_dir:
+                self.sidebar.set_root_path(str(save_dir))
+
+    def _show_first_run_dialog(self):
+        """Show the first run setup dialog"""
+        from .dialogs.first_run_dialog import FirstRunDialog
+
+        dialog = FirstRunDialog(self)
+        result = dialog.exec()
+
+        if result == QDialog.Accepted:
+            path = dialog.get_selected_path()
+            logger.info(f"First run setup complete, save directory: {path}")
+            self._update_storage_info()
+
+            # Update sidebar to show the new directory
+            self.sidebar.set_root_path(path)
+            self.signals.status_message.emit("Setup complete! Ready to record.", 3000)
+        else:
+            # User cancelled - show warning
+            QMessageBox.warning(
+                self,
+                "Setup Required",
+                "Please select a save directory to continue.\n"
+                "You can set this later in Settings.",
+            )
+
+    @Slot()
+    def _handle_record_button_clicked(self):
+        """Handle REC button click - show dialog then start recording"""
+        # If already recording, ignore
+        if self._is_actually_recording:
+            return
+
+        # Check if configured
+        if not self._recording_controller.is_configured():
+            self._show_first_run_dialog()
+            return
+
+        # Show new session dialog FIRST
+        from .dialogs.new_session_dialog import NewSessionDialog
+
+        dialog = NewSessionDialog(self)
+        result = dialog.exec()
+
+        if result == QDialog.Accepted:
+            session_name = dialog.get_session_name()
+            save_dir = dialog.get_save_directory()
+
+            logger.info(f"Starting recording: {session_name} in {save_dir}")
+
+            # Actually start recording
+            success = self._recording_controller.start_recording(
+                session_name=session_name,
+                save_directory=save_dir,
+            )
+
+            if success:
+                self._is_actually_recording = True
+                self._current_session_name = session_name
+                self._current_session_dir = save_dir / session_name
+                self.session_label.setText(f"Session: {session_name}")
+                self.setWindowTitle(f"AI Lab Scribe - Recording: {session_name}")
+
+                # Reset timer
+                self.recording_bar.reset_timer()
+
+                # NOW emit recording_started to update UI
+                self.signals.recording_started.emit()
+
+                logger.info(f"Recording started successfully: {session_name}")
+            else:
+                self.signals.status_message.emit("Failed to start recording", 3000)
+        # If cancelled, button already reset in recording_bar
+
+    @Slot()
+    def _handle_stop_button_clicked(self):
+        """Handle Stop button click"""
+        if not self._is_actually_recording:
+            return
+
+        logger.info("Stopping recording")
+        audio_path = self._recording_controller.stop_recording()
+
+        self._is_actually_recording = False
+
+        # Emit recording_stopped to update UI
+        self.signals.recording_stopped.emit()
+
+        if audio_path and audio_path.exists():
+            # Emit saved signal with path
+            self.signals.recording_saved.emit(str(audio_path))
+
+            self.setWindowTitle("AI Lab Scribe")
+
+            # Refresh sidebar to show new files
+            if hasattr(self, '_current_session_dir') and self._current_session_dir:
+                self.sidebar.set_root_path(str(self._current_session_dir.parent))
+        else:
+            logger.warning("Recording stopped but no audio file found")
+            self.signals.status_message.emit("Recording stopped (no audio saved)", 3000)
+
+    @Slot()
+    def _handle_pause_button_clicked(self):
+        """Handle Pause/Resume button click"""
+        if not self._is_actually_recording:
+            return
+
+        if self.recording_bar._is_paused:
+            # Currently paused, resume
+            self._recording_controller.resume_recording()
+            self.signals.recording_resumed.emit()
+        else:
+            # Currently recording, pause
+            self._recording_controller.pause_recording()
+            self.signals.recording_paused.emit()
+
+    @Slot(str)
+    def _on_recording_saved(self, audio_path: str):
+        """Handle recording saved - show notification with reveal option"""
+        from pathlib import Path
+        path = Path(audio_path)
+
+        # Create a clearer info message box with light theme
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Recording Saved")
+        msg_box.setIcon(QMessageBox.Information)
+        msg_box.setText("Recording saved successfully!")
+        msg_box.setInformativeText(
+            f"Location: {path.parent.name}/\n"
+            f"File: {path.name}\n\n"
+            f"Would you like to open the folder?"
+        )
+        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg_box.setDefaultButton(QMessageBox.Yes)
+
+        # Force light theme for dialog
+        msg_box.setStyleSheet("""
+            QMessageBox {
+                background-color: #FFFFFF;
+            }
+            QMessageBox QLabel {
+                color: #37352F;
+                background-color: transparent;
+            }
+            QPushButton {
+                background-color: #F7F7F5;
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                padding: 6px 16px;
+                min-width: 60px;
+                color: #37352F;
+            }
+            QPushButton:hover {
+                background-color: #EEEEEE;
+            }
+            QPushButton:default {
+                background-color: #2383E2;
+                border-color: #2383E2;
+                color: white;
+            }
+        """)
+
+        reply = msg_box.exec()
+
+        if reply == QMessageBox.Yes:
+            self._reveal_in_explorer(path.parent)
+
+    @Slot(int)
+    def _on_recording_time_updated(self, seconds: int):
+        """Handle recording time updates"""
+        if self._is_actually_recording:
+            self._recording_controller.update_duration(seconds)
+
+    def _reveal_in_explorer(self, path):
+        """Open the folder in system file explorer"""
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        path = Path(path)
+        if not path.exists():
+            logger.warning(f"Path does not exist: {path}")
+            return
+
+        try:
+            if sys.platform == "win32":
+                # Windows - use explorer
+                subprocess.run(["explorer", str(path)], check=False)
+            elif sys.platform == "darwin":
+                # macOS - use Finder
+                subprocess.run(["open", str(path)], check=False)
+            else:
+                # Linux - use xdg-open
+                subprocess.run(["xdg-open", str(path)], check=False)
+            logger.info(f"Opened folder: {path}")
+        except Exception as e:
+            logger.error(f"Failed to open folder: {e}")
+            self.signals.status_message.emit(f"Could not open folder: {e}", 3000)
 
     def _show_status_message(self, message: str, timeout: int = 3000):
         """Show a message in the status bar"""
         self.status_label.setText(message)
         if timeout > 0:
-            from PySide6.QtCore import QTimer
             QTimer.singleShot(timeout, lambda: self.status_label.setText("Ready"))
 
     def _on_session_opened(self, session_id: str):
@@ -229,49 +470,39 @@ class MainWindow(QMainWindow):
         self.session_label.setText(f"Session: {session_id}")
         self.setWindowTitle(f"AI Lab Scribe - {session_id}")
 
-    def _on_recording_started(self):
-        """Handle recording started"""
-        self.setWindowTitle("AI Lab Scribe - Recording...")
-
-    def _on_recording_stopped(self):
-        """Handle recording stopped"""
-        session = self.session_label.text().replace("Session: ", "")
-        if session and session != "Untitled":
-            self.setWindowTitle(f"AI Lab Scribe - {session}")
-        else:
-            self.setWindowTitle("AI Lab Scribe")
-
     def _on_settings_clicked(self):
         """Handle settings button click"""
+        # TODO: Show settings dialog
         self.signals.status_message.emit("Settings dialog (coming soon)", 2000)
 
     def _on_about_clicked(self):
         """Handle about button click"""
-        from PySide6.QtWidgets import QMessageBox
         QMessageBox.about(
             self,
             "About AI Lab Scribe",
             "<h3>AI Lab Scribe</h3>"
             "<p>Intelligent Electron Microscope Experiment Recording System</p>"
             "<p>Version 0.1.0</p>"
-            "<p>AtomSTEM / Yale University</p>"
+            "<p>AtomE Corp</p>"
             "<p>2026</p>"
         )
 
     def closeEvent(self, event):
         """Handle window close"""
-        # Could add confirmation dialog if recording
-        if self.recording_bar._is_recording:
-            from PySide6.QtWidgets import QMessageBox
+        # Check if recording
+        if self._is_actually_recording:
             reply = QMessageBox.question(
                 self,
                 "Confirm Exit",
-                "Recording is in progress. Are you sure you want to exit?",
+                "Recording is in progress. Stop recording and exit?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
             if reply == QMessageBox.No:
                 event.ignore()
                 return
+
+            # Stop recording before closing
+            self._recording_controller.stop_recording()
 
         event.accept()

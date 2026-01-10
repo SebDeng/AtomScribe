@@ -12,10 +12,17 @@ class AppSignals(QObject):
     _instance = None
 
     # ===== Recording signals =====
-    recording_started = Signal()
+    # Request signals (from UI buttons)
+    record_button_clicked = Signal()  # REC button clicked - triggers dialog
+    stop_button_clicked = Signal()    # Stop button clicked
+    pause_button_clicked = Signal()   # Pause/Resume button clicked
+
+    # State signals (actual recording state changes)
+    recording_started = Signal()      # Recording actually started
     recording_paused = Signal()
     recording_resumed = Signal()
     recording_stopped = Signal()
+    recording_saved = Signal(str)     # Path to saved recording
     recording_time_updated = Signal(int)  # elapsed seconds
 
     # ===== Audio signals =====
