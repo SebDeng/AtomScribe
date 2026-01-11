@@ -30,8 +30,19 @@ class AppSignals(QObject):
     audio_device_changed = Signal(str)
 
     # ===== Transcript signals =====
+    transcript_segment = Signal(object)  # TranscriptSegment object (new segment)
+    transcript_segment_updated = Signal(object)  # TranscriptSegment object (update to existing)
+    transcript_segment_corrected = Signal(object)  # CorrectionResult object (LLM corrected)
     transcript_received = Signal(dict)  # {"timestamp", "speaker", "text", "is_final"}
     transcript_updated = Signal(str, str)  # (id, new_text)
+    transcription_model_loaded = Signal()  # Model finished loading
+    transcription_started = Signal()
+    transcription_stopped = Signal()
+
+    # ===== LLM signals =====
+    llm_model_loaded = Signal()  # LLM model finished loading
+    llm_processing_started = Signal()
+    llm_processing_stopped = Signal()
 
     # ===== Session signals =====
     session_created = Signal(str)  # session_id

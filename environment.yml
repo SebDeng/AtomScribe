@@ -13,3 +13,5 @@ dependencies:
     - sounddevice>=0.4.6
     - numpy>=1.24.0
     - pydub>=0.25.1
+    - faster-whisper>=1.0.0  # Real-time speech-to-text
+    - llama-cpp-python>=0.2.0  # LLM post-processing (install with CUDA: CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python)

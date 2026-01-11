@@ -64,3 +64,6 @@ htmlcov/
 # *.wav
 # *.mp3
 # *.json
+
+# LLM Models (large files)
+models/*.gguf

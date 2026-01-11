@@ -53,6 +53,12 @@ class MainWindow(QMainWindow):
         # Check for first run after UI is set up
         QTimer.singleShot(100, self._check_first_run)
 
+        # Preload transcription model in background (after UI is ready)
+        QTimer.singleShot(500, self._preload_transcription_model)
+
+        # Preload LLM model in background (after transcription model starts loading)
+        QTimer.singleShot(1000, self._preload_llm_model)
+
     def _setup_window(self):
         """Configure window properties"""
         self.setWindowTitle("AI Lab Scribe")
@@ -486,6 +492,22 @@ class MainWindow(QMainWindow):
             "<p>AtomE Corp</p>"
             "<p>2026</p>"
         )
+
+    def _preload_transcription_model(self):
+        """Preload the transcription model in background for faster first recording"""
+        try:
+            self._recording_controller.preload_transcription_model()
+        except Exception as e:
+            logger.warning(f"Failed to preload transcription model: {e}")
+            # Non-fatal - model will load on first recording
+
+    def _preload_llm_model(self):
+        """Preload the LLM model in background for transcript correction"""
+        try:
+            self._recording_controller.preload_llm_model()
+        except Exception as e:
+            logger.warning(f"Failed to preload LLM model: {e}")
+            # Non-fatal - LLM correction will be disabled if model not available
 
     def closeEvent(self, event):
         """Handle window close"""

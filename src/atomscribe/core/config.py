@@ -19,6 +19,16 @@ class AppConfig(BaseModel):
     audio_channels: int = 1  # mono for speech
     audio_bitrate: int = 128  # kbps for mp3
 
+    # Transcription settings
+    transcription_language: Optional[str] = None  # None = auto-detect, "zh", "en", etc.
+    transcription_initial_prompt: Optional[str] = None  # Domain-specific vocabulary hint
+    transcription_model: str = "large-v3"  # Whisper model size
+    transcription_hotwords: Optional[str] = None  # Comma-separated hotwords to boost
+
+    # Post-processing replacements for common transcription errors
+    # Format: {"wrong": "correct", ...}
+    transcription_replacements: Optional[dict] = None
+
     # UI settings
     last_window_geometry: Optional[str] = None
     last_selected_device: Optional[str] = None

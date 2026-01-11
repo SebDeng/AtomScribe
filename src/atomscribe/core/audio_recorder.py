@@ -68,6 +68,9 @@ class AudioRecorder:
         # Callback for audio level updates
         self._level_callback: Optional[Callable[[float], None]] = None
 
+        # Callback for raw audio data (for transcription)
+        self._audio_data_callback: Optional[Callable[[np.ndarray], None]] = None
+
         # Selected device
         self._device_index: Optional[int] = None
 
@@ -89,6 +92,10 @@ class AudioRecorder:
     def set_level_callback(self, callback: Callable[[float], None]):
         """Set callback for audio level updates (0.0 to 1.0)"""
         self._level_callback = callback
+
+    def set_audio_data_callback(self, callback: Callable[[np.ndarray], None]):
+        """Set callback for raw audio data (for transcription)"""
+        self._audio_data_callback = callback
 
     def set_device(self, device_index: int):
         """Set the audio input device"""
@@ -190,6 +197,11 @@ class AudioRecorder:
                 rms = np.sqrt(np.mean(indata.astype(np.float32) ** 2))
                 level = min(1.0, rms / 10000.0)  # Normalize (adjust divisor as needed)
                 self._level_callback(level)
+
+            # Send audio data to transcriber
+            if self._audio_data_callback:
+                # Make a copy to avoid issues with buffer reuse
+                self._audio_data_callback(indata.copy())
 
         elif self._state == RecordingState.PAUSED:
             # Send zero level when paused

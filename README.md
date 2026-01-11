@@ -8,9 +8,14 @@ Built with PySide6, featuring a clean Notion-inspired interface.
 
 - **Real-time Recording** - Record lab sessions with live waveform visualization
 - **Microphone Selection** - Auto-detect and select from available audio input devices
+- **Real-time Transcription** - Live speech-to-text using faster-whisper (large-v3 model)
+- **LLM Post-Processing** - AI-powered transcript correction with Qwen3-4B-Instruct
+  - Fixes transcription errors (e.g., "hi-tension" → "high tension")
+  - Removes filler words (嗯, 啊, uh, um, like, etc.)
+  - Visual indicator for AI-corrected segments
+- **Scientific Vocabulary** - Built-in support for electron microscopy terminology
 - **File Browser** - Browse and manage transcription files (.json, .txt, .md, .wav, .mp3)
-- **Live Transcript** - View real-time transcription with speaker identification
-- **Session Preview** - Preview transcript, summary, and events in tabbed view
+- **Session Management** - Organize recordings by date and project
 - **Modern UI** - Clean, Notion-style bright theme with intuitive controls
 
 ## Screenshots
@@ -99,6 +104,7 @@ AtomScribe/
 │       │   └── widgets/         # UI components
 │       ├── styles/              # QSS themes and colors
 │       └── core/                # Business logic
+├── models/                      # LLM models (Qwen3-4B GGUF)
 ├── environment.yml              # Conda environment
 ├── pyproject.toml              # Project metadata
 └── README.md
@@ -111,6 +117,28 @@ AtomScribe/
 | PySide6 | >=6.6.0 | Qt GUI framework |
 | pydantic | >=2.0 | Data validation |
 | loguru | >=0.7.0 | Logging |
+| sounddevice | >=0.4.6 | Audio recording |
+| numpy | >=1.24.0 | Audio processing |
+| pydub | >=0.25.1 | MP3 encoding |
+| faster-whisper | >=1.0.0 | Speech-to-text |
+| llama-cpp-python | >=0.2.0 | LLM inference |
+
+### LLM Model Setup
+
+To enable AI-powered transcript correction, download the Qwen3-4B model:
+
+1. **Download the model** from [HuggingFace](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF)
+   - Recommended: `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` (~3GB, requires ~3GB VRAM)
+
+2. **Place the model** at:
+   ```
+   AtomScribe/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+   ```
+
+3. **For GPU acceleration** (optional):
+   ```bash
+   CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
+   ```
 
 ## Development
 
@@ -140,9 +168,11 @@ Configuration files are stored in:
 
 ## Roadmap
 
-- [ ] Speech-to-text integration (Whisper, Azure Speech)
-- [ ] Speaker diarization
+- [x] Speech-to-text integration (faster-whisper)
+- [x] LLM post-processing (Qwen3-4B-Instruct)
+- [ ] Speaker diarization (pyannote-audio)
 - [ ] Export to multiple formats (PDF, DOCX, SRT)
+- [ ] Settings dialog for configuration
 - [ ] Cloud sync support
 - [ ] Keyboard shortcuts
 - [ ] Dark theme option
@@ -162,5 +192,8 @@ This project is proprietary software developed by AtomE Corp.
 ## Acknowledgments
 
 - [PySide6](https://doc.qt.io/qtforpython/) - Qt for Python
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) - Fast Whisper transcription
+- [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) - Python bindings for llama.cpp
+- [Qwen3](https://huggingface.co/Qwen) - Alibaba's powerful language model
 - [Notion](https://notion.so) - UI design inspiration
 - [Loguru](https://github.com/Delgan/loguru) - Python logging made simple

@@ -145,9 +145,11 @@ class Session:
         return self.directory / "events.json"
 
     def update_duration(self, seconds: int):
-        """Update the recording duration"""
+        """Update the recording duration (saves to disk every 10 seconds)"""
         self.metadata.duration_seconds = seconds
-        self.save_metadata()
+        # Only save metadata every 10 seconds to reduce disk I/O
+        if seconds % 10 == 0:
+            self.save_metadata()
 
     def set_status(self, status: str):
         """Update the session status"""
