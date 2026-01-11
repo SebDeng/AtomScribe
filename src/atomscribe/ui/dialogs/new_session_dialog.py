@@ -299,8 +299,8 @@ class NewSessionDialog(QDialog):
         layout.addWidget(name_label)
 
         self.name_edit = QLineEdit()
-        default_name = f"Session_{datetime.now().strftime('%Y-%m-%d')}"
-        self.name_edit.setPlaceholderText(default_name)
+        # Show example: leave empty to use timestamp as folder name
+        self.name_edit.setPlaceholderText(f"Leave empty for auto-name (e.g., {datetime.now().strftime('%H%M%S')})")
         self.name_edit.setMinimumHeight(40)
         self.name_edit.setStyleSheet("""
             QLineEdit {
@@ -655,11 +655,11 @@ class NewSessionDialog(QDialog):
             self.custom_path_edit.setText(folder)
 
     def get_session_name(self) -> str:
-        """Get the session name (or generate default)"""
-        name = self.name_edit.text().strip()
-        if not name:
-            name = f"Session_{datetime.now().strftime('%Y-%m-%d')}"
-        return name
+        """Get the session name (empty string if not provided).
+
+        If empty, session.py will use timestamp as folder name.
+        """
+        return self.name_edit.text().strip()
 
     def get_save_directory(self) -> Path:
         """Get the save directory"""

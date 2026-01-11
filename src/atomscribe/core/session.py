@@ -58,17 +58,22 @@ class Session:
 
     @classmethod
     def create_new(cls, base_directory: Path, name: Optional[str] = None) -> "Session":
-        """Create a new session"""
+        """Create a new session.
+
+        Directory structure: base_directory/YYYY-MM-DD/session_name/
+        If no name is provided, uses timestamp (HHMMSS) as folder name.
+        """
         # Generate session ID from timestamp
         now = datetime.now()
         session_id = now.strftime("%Y%m%d_%H%M%S")
+        date_folder = now.strftime("%Y-%m-%d")
 
-        # Generate default name if not provided
-        if name is None:
-            name = f"Session_{now.strftime('%Y-%m-%d')}"
+        # Generate default name if not provided (use time as folder name)
+        if name is None or name.strip() == "":
+            name = now.strftime("%H%M%S")  # e.g., "180530"
 
-        # Create session directory
-        session_dir = base_directory / name
+        # Create session directory: base/YYYY-MM-DD/name/
+        session_dir = base_directory / date_folder / name
         session_dir.mkdir(parents=True, exist_ok=True)
 
         # Create metadata
@@ -115,20 +120,17 @@ class Session:
             logger.error(f"Failed to save session metadata: {e}")
 
     def get_audio_path(self) -> Path:
-        """Get the path for the audio file with timestamp.
+        """Get the path for the audio file.
 
-        The path is generated once and cached for the session.
+        Each session has its own folder, so simple filename is sufficient.
         """
-        from datetime import datetime
-
         # If we already have an audio file path, return it
         if self.metadata.audio_file:
             return Path(self.metadata.audio_file)
 
-        # Generate new path with timestamp
+        # Simple filename - folder provides uniqueness
         ext = self.metadata.audio_format
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        audio_path = self.directory / f"recording_{timestamp}.{ext}"
+        audio_path = self.directory / f"recording.{ext}"
 
         # Store it in metadata
         self.metadata.audio_file = str(audio_path)
@@ -137,20 +139,17 @@ class Session:
         return audio_path
 
     def get_video_path(self) -> Path:
-        """Get the path for the video file (screen recording) with timestamp.
+        """Get the path for the video file (screen recording).
 
-        The path is generated once and cached for the session.
+        Each session has its own folder, so simple filename is sufficient.
         """
-        from datetime import datetime
-
         # If we already have a video file path, return it
         if self.metadata.video_file:
             return Path(self.metadata.video_file)
 
-        # Generate new path with timestamp
+        # Simple filename - folder provides uniqueness
         ext = self.metadata.video_format
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        video_path = self.directory / f"screen_{timestamp}.{ext}"
+        video_path = self.directory / f"screen.{ext}"
 
         # Store it in metadata
         self.metadata.video_file = str(video_path)
@@ -159,15 +158,15 @@ class Session:
         return video_path
 
     def get_transcript_path(self) -> Path:
-        """Get the path for the transcript file"""
+        """Get the path for the transcript file."""
         return self.directory / "transcript.json"
 
     def get_summary_path(self) -> Path:
-        """Get the path for the summary file"""
+        """Get the path for the summary file."""
         return self.directory / "summary.md"
 
     def get_events_path(self) -> Path:
-        """Get the path for the events file"""
+        """Get the path for the events file."""
         return self.directory / "events.json"
 
     def update_duration(self, seconds: int):

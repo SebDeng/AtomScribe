@@ -344,10 +344,13 @@ class MainWindow(QMainWindow):
 
             if success:
                 self._is_actually_recording = True
-                self._current_session_name = session_name
-                self._current_session_dir = save_dir / session_name
-                self.session_label.setText(f"Session: {session_name}")
-                self.setWindowTitle(f"AI Lab Scribe - Recording: {session_name}")
+                # Get actual session info (name may have been auto-generated)
+                current_session = self._recording_controller.get_current_session()
+                actual_name = current_session.metadata.name if current_session else session_name
+                self._current_session_name = actual_name
+                self._current_session_dir = current_session.directory if current_session else save_dir
+                self.session_label.setText(f"Session: {actual_name}")
+                self.setWindowTitle(f"AI Lab Scribe - Recording: {actual_name}")
 
                 # Reset timer
                 self.recording_bar.reset_timer()
@@ -355,7 +358,7 @@ class MainWindow(QMainWindow):
                 # NOW emit recording_started to update UI
                 self.signals.recording_started.emit()
 
-                logger.info(f"Recording started successfully: {session_name}")
+                logger.info(f"Recording started successfully: {actual_name}")
             else:
                 self.signals.status_message.emit("Failed to start recording", 3000)
         # If cancelled, button already reset in recording_bar
