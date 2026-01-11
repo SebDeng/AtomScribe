@@ -365,6 +365,19 @@ class RecordingController(QObject):
             # Stop recording
             audio_path = self._audio_recorder.stop_recording()
 
+            # Merge audio into video if both exist
+            if video_path and audio_path:
+                self._signals.status_message.emit("Merging audio into video...", 0)
+                logger.info("Merging audio track into screen recording...")
+                merged_path = self._screen_recorder.merge_audio_video(video_path, audio_path)
+                if merged_path:
+                    video_path = merged_path
+                    logger.info(f"Audio/video merge complete: {merged_path}")
+                    self._signals.status_message.emit("Recording saved with audio", 3000)
+                else:
+                    logger.warning("Failed to merge audio into video, keeping separate files")
+                    self._signals.status_message.emit("Warning: Audio not merged into video", 5000)
+
             if self._current_session:
                 # Update session metadata
                 self._current_session.metadata.audio_file = str(audio_path) if audio_path else None

@@ -453,6 +453,100 @@ class ScreenRecorder:
         """Check if screen recording is available (dependencies installed)"""
         return mss is not None and self._ffmpeg_path is not None
 
+    def merge_audio_video(
+        self,
+        video_path: Path,
+        audio_path: Path,
+        output_path: Optional[Path] = None,
+    ) -> Optional[Path]:
+        """
+        Merge audio track into video file.
+
+        Args:
+            video_path: Path to the video file (without audio)
+            audio_path: Path to the audio file (WAV)
+            output_path: Output path for merged file. If None, replaces video file.
+
+        Returns:
+            Path to the merged video file, or None if failed
+        """
+        if self._ffmpeg_path is None:
+            logger.error("FFmpeg not available for merging")
+            return None
+
+        video_path = Path(video_path)
+        audio_path = Path(audio_path)
+
+        if not video_path.exists():
+            logger.error(f"Video file not found: {video_path}")
+            return None
+
+        if not audio_path.exists():
+            logger.error(f"Audio file not found: {audio_path}")
+            return None
+
+        # If no output path, create temp file then replace original
+        if output_path is None:
+            output_path = video_path.with_suffix(".merged.mp4")
+            replace_original = True
+        else:
+            output_path = Path(output_path)
+            replace_original = False
+
+        logger.info(f"Merging audio into video: {video_path}")
+
+        # FFmpeg command to merge audio and video
+        # -c:v copy = copy video stream without re-encoding
+        # -c:a aac = encode audio as AAC
+        # -shortest = stop when shortest stream ends
+        ffmpeg_cmd = [
+            self._ffmpeg_path,
+            "-y",  # Overwrite output
+            "-i", str(video_path),  # Video input
+            "-i", str(audio_path),  # Audio input
+            "-c:v", "copy",  # Copy video stream (no re-encode)
+            "-c:a", "aac",  # Encode audio as AAC
+            "-b:a", "128k",  # Audio bitrate
+            "-shortest",  # Stop when shortest stream ends
+            "-map", "0:v:0",  # Use video from first input
+            "-map", "1:a:0",  # Use audio from second input
+            str(output_path),
+        ]
+
+        try:
+            result = subprocess.run(
+                ffmpeg_cmd,
+                capture_output=True,
+                timeout=300,  # 5 minute timeout
+            )
+
+            if result.returncode != 0:
+                stderr = result.stderr.decode(errors='ignore')
+                logger.error(f"FFmpeg merge failed: {stderr[:500]}")
+                return None
+
+            # If replacing original, swap files
+            if replace_original and output_path.exists():
+                try:
+                    video_path.unlink()  # Delete original
+                    output_path.rename(video_path)  # Rename merged to original
+                    output_path = video_path
+                    logger.info(f"Replaced original video with merged version")
+                except Exception as e:
+                    logger.warning(f"Could not replace original file: {e}")
+                    # Keep the merged file with .merged.mp4 extension
+
+            file_size = output_path.stat().st_size
+            logger.info(f"Audio/video merge complete: {output_path} ({file_size} bytes)")
+            return output_path
+
+        except subprocess.TimeoutExpired:
+            logger.error("FFmpeg merge timed out")
+            return None
+        except Exception as e:
+            logger.error(f"Error merging audio/video: {e}")
+            return None
+
 
 # Singleton instance
 _recorder_instance: Optional[ScreenRecorder] = None
