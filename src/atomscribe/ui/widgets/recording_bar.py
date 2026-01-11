@@ -15,6 +15,7 @@ from loguru import logger
 
 from ...signals import get_app_signals
 from ...core.audio_recorder import get_audio_recorder, AudioDevice
+from ...core.screen_recorder import get_screen_recorder
 from .waveform import WaveformWidget
 
 
@@ -34,6 +35,8 @@ class RecordingBar(QWidget):
         self._is_paused = False
         self._elapsed_seconds = 0
         self._audio_devices: list[AudioDevice] = []
+        self._screen_recording_enabled = True  # Default enabled
+        self._screen_recording_active = False  # Currently recording screen
 
         self._setup_ui()
         self._connect_signals()
@@ -163,6 +166,29 @@ class RecordingBar(QWidget):
         # Separator
         layout.addSpacing(12)
 
+        # Screen recording toggle button
+        self.screen_toggle_btn = QPushButton("Screen")
+        self.screen_toggle_btn.setObjectName("screenToggleButton")
+        self.screen_toggle_btn.setCheckable(True)
+        self.screen_toggle_btn.setChecked(self._screen_recording_enabled)
+        self.screen_toggle_btn.setToolTip("Enable/Disable Screen Recording")
+        self.screen_toggle_btn.clicked.connect(self._on_screen_toggle_clicked)
+        self.screen_toggle_btn.setFixedHeight(28)
+        self._update_screen_toggle_style()
+        layout.addWidget(self.screen_toggle_btn)
+
+        # Screen recording status indicator
+        self.screen_status_label = QLabel("")
+        self.screen_status_label.setObjectName("screenStatusLabel")
+        self.screen_status_label.setFixedWidth(24)
+        self.screen_status_label.setAlignment(Qt.AlignCenter)
+        self.screen_status_label.setStyleSheet("font-size: 14px;")
+        self.screen_status_label.setVisible(False)  # Hidden until recording starts
+        layout.addWidget(self.screen_status_label)
+
+        # Separator
+        layout.addSpacing(12)
+
         # Microphone label
         mic_label = QLabel("Mic:")
         mic_label.setStyleSheet("color: #787774; font-size: 12px;")
@@ -201,6 +227,13 @@ class RecordingBar(QWidget):
         self.signals.recording_paused.connect(self._on_recording_paused)
         self.signals.recording_resumed.connect(self._on_recording_resumed)
         self.signals.audio_level_updated.connect(self.waveform.set_level)
+
+        # Screen recording signals
+        self.signals.screen_recording_started.connect(self._on_screen_recording_started)
+        self.signals.screen_recording_stopped.connect(self._on_screen_recording_stopped)
+        self.signals.screen_recording_paused.connect(self._on_screen_recording_paused)
+        self.signals.screen_recording_resumed.connect(self._on_screen_recording_resumed)
+        self.signals.screen_recording_error.connect(self._on_screen_recording_error)
 
     def _setup_timer(self):
         """Set up the recording timer"""
@@ -364,3 +397,110 @@ class RecordingBar(QWidget):
     def refresh_devices(self):
         """Refresh the list of audio devices"""
         self._populate_devices()
+
+    # ===== Screen recording methods =====
+
+    def _update_screen_toggle_style(self):
+        """Update the screen toggle button style based on state"""
+        if self._screen_recording_enabled:
+            self.screen_toggle_btn.setStyleSheet("""
+                QPushButton#screenToggleButton {
+                    background-color: #E8F5E9;
+                    border: 1px solid #66BB6A;
+                    border-radius: 4px;
+                    color: #2E7D32;
+                    font-size: 11px;
+                    font-weight: bold;
+                    padding: 0 8px;
+                }
+                QPushButton#screenToggleButton:hover {
+                    background-color: #C8E6C9;
+                    border-color: #4CAF50;
+                }
+                QPushButton#screenToggleButton:checked {
+                    background-color: #4CAF50;
+                    border-color: #388E3C;
+                    color: white;
+                }
+            """)
+        else:
+            self.screen_toggle_btn.setStyleSheet("""
+                QPushButton#screenToggleButton {
+                    background-color: #F5F5F5;
+                    border: 1px solid #E0E0E0;
+                    border-radius: 4px;
+                    color: #9E9E9E;
+                    font-size: 11px;
+                    font-weight: bold;
+                    padding: 0 8px;
+                }
+                QPushButton#screenToggleButton:hover {
+                    background-color: #EEEEEE;
+                    border-color: #BDBDBD;
+                }
+            """)
+
+    @Slot()
+    def _on_screen_toggle_clicked(self):
+        """Handle screen recording toggle button click"""
+        self._screen_recording_enabled = self.screen_toggle_btn.isChecked()
+        self._update_screen_toggle_style()
+
+        # Notify the recording controller
+        from ...core.recording_controller import get_recording_controller
+        controller = get_recording_controller()
+        controller.set_screen_recording_enabled(self._screen_recording_enabled)
+
+        status = "enabled" if self._screen_recording_enabled else "disabled"
+        logger.info(f"Screen recording {status}")
+        self.signals.status_message.emit(f"Screen recording {status}", 2000)
+
+    @Slot()
+    def _on_screen_recording_started(self):
+        """Update UI when screen recording starts"""
+        self._screen_recording_active = True
+        self.screen_status_label.setText("🔴")
+        self.screen_status_label.setToolTip("Screen recording active")
+        self.screen_status_label.setVisible(True)
+        # Disable toggle during recording
+        self.screen_toggle_btn.setEnabled(False)
+
+    @Slot()
+    def _on_screen_recording_stopped(self):
+        """Update UI when screen recording stops"""
+        self._screen_recording_active = False
+        self.screen_status_label.setText("")
+        self.screen_status_label.setVisible(False)
+        # Re-enable toggle after recording
+        self.screen_toggle_btn.setEnabled(True)
+
+    @Slot()
+    def _on_screen_recording_paused(self):
+        """Update UI when screen recording is paused"""
+        self.screen_status_label.setText("⏸")
+        self.screen_status_label.setToolTip("Screen recording paused")
+
+    @Slot()
+    def _on_screen_recording_resumed(self):
+        """Update UI when screen recording is resumed"""
+        self.screen_status_label.setText("🔴")
+        self.screen_status_label.setToolTip("Screen recording active")
+
+    @Slot(str)
+    def _on_screen_recording_error(self, error_msg: str):
+        """Handle screen recording error"""
+        logger.error(f"Screen recording error: {error_msg}")
+        self._screen_recording_active = False
+        self.screen_status_label.setText("⚠")
+        self.screen_status_label.setToolTip(f"Screen recording error: {error_msg}")
+        self.signals.status_message.emit(f"Screen recording error: {error_msg}", 5000)
+
+    def is_screen_recording_enabled(self) -> bool:
+        """Check if screen recording is enabled"""
+        return self._screen_recording_enabled
+
+    def set_screen_recording_enabled(self, enabled: bool):
+        """Set screen recording enabled state"""
+        self._screen_recording_enabled = enabled
+        self.screen_toggle_btn.setChecked(enabled)
+        self._update_screen_toggle_style()

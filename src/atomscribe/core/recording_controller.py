@@ -7,6 +7,7 @@ from PySide6.QtCore import QObject, Slot
 
 from .session import Session, get_session_manager
 from .audio_recorder import get_audio_recorder, RecordingState
+from .screen_recorder import get_screen_recorder, ScreenRecordingState
 from .config import get_config_manager
 from .transcriber import get_transcriber, TranscriptSegment
 from .llm_processor import get_llm_processor, CorrectionResult
@@ -28,8 +29,19 @@ class RecordingController(QObject):
         self._audio_recorder = get_audio_recorder()
         self._config = get_config_manager()
 
-        # Get transcriber with config settings
+        # Get config settings
         config = self._config.config
+
+        # Get screen recorder with config settings
+        self._screen_recorder = get_screen_recorder(
+            fps=config.screen_recording_fps,
+            monitor_index=config.screen_recording_monitor,
+            quality=config.screen_recording_quality,
+            codec=config.screen_recording_codec,
+        )
+        self._screen_recording_enabled = config.screen_recording_enabled
+
+        # Get transcriber with config settings
 
         # Parse hotwords from comma-separated string
         hotwords = None
@@ -77,6 +89,9 @@ class RecordingController(QObject):
         if self._diarizer:
             self._diarizer.set_on_speaker_callback(self._on_speaker_identified)
             self._diarizer.set_on_model_loaded_callback(self._on_diarization_model_loaded)
+
+        # Connect screen recorder callbacks
+        self._screen_recorder.set_on_error_callback(self._on_screen_recording_error)
 
         # Connect signals
         self._connect_signals()
@@ -171,6 +186,12 @@ class RecordingController(QObject):
         self._signals.status_message.emit("Speaker diarization model loaded", 2000)
         logger.info("Speaker diarization model loaded and ready")
 
+    def _on_screen_recording_error(self, error: str):
+        """Handle screen recording error"""
+        self._signals.screen_recording_error.emit(error)
+        self._signals.status_message.emit(f"Screen recording error: {error}", 5000)
+        logger.error(f"Screen recording error: {error}")
+
     def is_configured(self) -> bool:
         """Check if the app is configured (has a save directory)"""
         return self._config.get_default_save_directory() is not None
@@ -248,6 +269,23 @@ class RecordingController(QObject):
             else:
                 logger.warning("Speaker diarizer NOT started (model not loaded or disabled)")
 
+            # Start screen recording if enabled and available
+            logger.info(f"Screen recording status: enabled={self._screen_recording_enabled}, available={self._screen_recorder.is_available()}")
+            if self._screen_recording_enabled and self._screen_recorder.is_available():
+                try:
+                    video_path = self._current_session.get_video_path()
+                    self._screen_recorder.start_recording(video_path)
+                    self._signals.screen_recording_started.emit()
+                    logger.info(f"Screen recording started: {video_path}")
+                except Exception as e:
+                    logger.error(f"Failed to start screen recording: {e}")
+                    self._signals.status_message.emit(f"Screen recording failed: {str(e)}", 5000)
+            else:
+                if not self._screen_recording_enabled:
+                    logger.info("Screen recording disabled in config")
+                else:
+                    logger.warning("Screen recording NOT started (dependencies not available)")
+
             # Update session status
             self._current_session.set_status("recording")
 
@@ -263,6 +301,12 @@ class RecordingController(QObject):
         """Pause the current recording"""
         if self._audio_recorder.is_recording:
             self._audio_recorder.pause_recording()
+
+            # Pause screen recording
+            if self._screen_recorder.is_recording:
+                self._screen_recorder.pause_recording()
+                self._signals.screen_recording_paused.emit()
+
             if self._current_session:
                 self._current_session.set_status("paused")
             logger.info("Recording paused")
@@ -271,6 +315,12 @@ class RecordingController(QObject):
         """Resume the current recording"""
         if self._audio_recorder.is_paused:
             self._audio_recorder.resume_recording()
+
+            # Resume screen recording
+            if self._screen_recorder.is_paused:
+                self._screen_recorder.resume_recording()
+                self._signals.screen_recording_resumed.emit()
+
             if self._current_session:
                 self._current_session.set_status("recording")
             logger.info("Recording resumed")
@@ -305,12 +355,20 @@ class RecordingController(QObject):
                 self._signals.diarization_stopped.emit()
                 logger.info("Speaker diarizer stopped")
 
+            # Stop screen recording
+            video_path = None
+            if self._screen_recorder.state != ScreenRecordingState.IDLE:
+                video_path = self._screen_recorder.stop_recording()
+                self._signals.screen_recording_stopped.emit()
+                logger.info(f"Screen recording stopped: {video_path}")
+
             # Stop recording
             audio_path = self._audio_recorder.stop_recording()
 
             if self._current_session:
                 # Update session metadata
                 self._current_session.metadata.audio_file = str(audio_path) if audio_path else None
+                self._current_session.metadata.video_file = str(video_path) if video_path else None
                 self._current_session.metadata.transcript_file = str(self._current_session.get_transcript_path())
                 self._current_session.set_status("completed")
 
@@ -385,6 +443,27 @@ class RecordingController(QObject):
     def is_diarization_model_loaded(self) -> bool:
         """Check if diarization model is loaded"""
         return self._diarizer.is_model_loaded() if self._diarizer else False
+
+    def set_screen_recording_enabled(self, enabled: bool):
+        """Enable or disable screen recording"""
+        self._screen_recording_enabled = enabled
+        logger.info(f"Screen recording {'enabled' if enabled else 'disabled'}")
+
+    def is_screen_recording_enabled(self) -> bool:
+        """Check if screen recording is enabled"""
+        return self._screen_recording_enabled
+
+    def is_screen_recording_available(self) -> bool:
+        """Check if screen recording is available (dependencies installed)"""
+        return self._screen_recorder.is_available()
+
+    def get_available_monitors(self):
+        """Get list of available monitors for screen recording"""
+        return self._screen_recorder.get_monitors()
+
+    def set_screen_recording_monitor(self, monitor_index: int):
+        """Set the monitor to record"""
+        self._screen_recorder.set_monitor(monitor_index)
 
 
 # Singleton

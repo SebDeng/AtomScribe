@@ -20,3 +20,4 @@ dependencies:
     - torchaudio>=2.0.0  # Audio processing for SpeechBrain
     - requests>=2.28.0  # Required by SpeechBrain for model downloading
     - huggingface_hub<0.22  # SpeechBrain 1.0.x compatibility (use_auth_token deprecation)
+    - mss>=9.0.0  # Screen capture for screen recording

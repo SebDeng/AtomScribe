@@ -35,6 +35,13 @@ class AppConfig(BaseModel):
     diarization_min_speakers: int = 2  # Minimum speakers for auto-detect
     diarization_max_speakers: int = 4  # Maximum speakers for auto-detect
 
+    # Screen recording settings
+    screen_recording_enabled: bool = True  # Enable screen recording by default
+    screen_recording_fps: int = 10  # Frames per second (10 recommended for UI recording)
+    screen_recording_monitor: int = 0  # Monitor index (0 = primary, -1 = all monitors)
+    screen_recording_quality: int = 23  # FFmpeg CRF value (0-51, lower = better quality, 23 = default)
+    screen_recording_codec: str = "libx264"  # Video codec (libx264 for compatibility, libx265 for better compression)
+
     # UI settings
     last_window_geometry: Optional[str] = None
     last_selected_device: Optional[str] = None

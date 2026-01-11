@@ -32,6 +32,10 @@ class SessionMetadata(BaseModel):
     audio_file: Optional[str] = None
     audio_format: str = "wav"
 
+    # Video file info (screen recording)
+    video_file: Optional[str] = None
+    video_format: str = "mp4"
+
     # Transcript file
     transcript_file: Optional[str] = None
 
@@ -131,6 +135,28 @@ class Session:
         self.save_metadata()
 
         return audio_path
+
+    def get_video_path(self) -> Path:
+        """Get the path for the video file (screen recording) with timestamp.
+
+        The path is generated once and cached for the session.
+        """
+        from datetime import datetime
+
+        # If we already have a video file path, return it
+        if self.metadata.video_file:
+            return Path(self.metadata.video_file)
+
+        # Generate new path with timestamp
+        ext = self.metadata.video_format
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        video_path = self.directory / f"screen_{timestamp}.{ext}"
+
+        # Store it in metadata
+        self.metadata.video_file = str(video_path)
+        self.save_metadata()
+
+        return video_path
 
     def get_transcript_path(self) -> Path:
         """Get the path for the transcript file"""

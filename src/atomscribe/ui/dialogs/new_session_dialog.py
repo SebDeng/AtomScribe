@@ -11,11 +11,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QFileDialog,
     QCheckBox,
+    QComboBox,
+    QGroupBox,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 
 from ...core.config import get_config_manager
+from ...core.screen_recorder import get_screen_recorder, MonitorInfo
 
 
 class NewSessionDialog(QDialog):
@@ -29,8 +32,10 @@ class NewSessionDialog(QDialog):
 
         self._config = get_config_manager()
         self._custom_path: str = ""
+        self._monitors: list[MonitorInfo] = []
 
         self._setup_ui()
+        self._populate_monitors()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -161,6 +166,77 @@ class NewSessionDialog(QDialog):
 
         layout.addLayout(custom_layout)
 
+        layout.addSpacing(16)
+
+        # Screen Recording section
+        screen_label = QLabel("Screen Recording")
+        screen_label.setFont(QFont("Segoe UI", 11))
+        screen_label.setStyleSheet("color: #787774;")
+        layout.addWidget(screen_label)
+
+        # Screen recording enable checkbox
+        self.screen_recording_check = QCheckBox("Enable screen recording")
+        self.screen_recording_check.setChecked(self._config.config.screen_recording_enabled)
+        self.screen_recording_check.setStyleSheet("""
+            QCheckBox {
+                font-size: 12px;
+                color: #37352F;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+            }
+        """)
+        self.screen_recording_check.toggled.connect(self._on_screen_recording_toggled)
+        layout.addWidget(self.screen_recording_check)
+
+        # Monitor selection
+        monitor_layout = QHBoxLayout()
+        monitor_layout.setSpacing(8)
+
+        monitor_label = QLabel("Monitor:")
+        monitor_label.setStyleSheet("font-size: 12px; color: #37352F;")
+        monitor_layout.addWidget(monitor_label)
+
+        self.monitor_combo = QComboBox()
+        self.monitor_combo.setMinimumHeight(32)
+        self.monitor_combo.setMinimumWidth(200)
+        self.monitor_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #FFFFFF;
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-size: 12px;
+                color: #37352F;
+            }
+            QComboBox:hover {
+                border-color: #BDBDBD;
+            }
+            QComboBox:disabled {
+                background-color: #F5F5F5;
+                color: #9E9E9E;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+        """)
+        monitor_layout.addWidget(self.monitor_combo, stretch=1)
+
+        layout.addLayout(monitor_layout)
+
+        # Screen recording availability check
+        screen_recorder = get_screen_recorder()
+        if not screen_recorder.is_available():
+            self.screen_recording_check.setEnabled(False)
+            self.screen_recording_check.setChecked(False)
+            self.monitor_combo.setEnabled(False)
+            self.monitor_combo.addItem("FFmpeg not available")
+            self.screen_recording_check.setToolTip(
+                "Screen recording requires FFmpeg. Please install FFmpeg and restart."
+            )
+
         layout.addSpacing(20)
 
         # Buttons
@@ -262,3 +338,47 @@ class NewSessionDialog(QDialog):
     def use_default_location(self) -> bool:
         """Check if using default location"""
         return self.default_radio.isChecked()
+
+    def _on_screen_recording_toggled(self, checked: bool):
+        """Handle screen recording checkbox toggle"""
+        self.monitor_combo.setEnabled(checked)
+
+    def _populate_monitors(self):
+        """Populate monitor dropdown"""
+        screen_recorder = get_screen_recorder()
+        if not screen_recorder.is_available():
+            return
+
+        self._monitors = screen_recorder.get_monitors()
+        self.monitor_combo.clear()
+
+        saved_monitor = self._config.config.screen_recording_monitor
+        selected_index = 0
+
+        for i, monitor in enumerate(self._monitors):
+            # Format: "Monitor 1 (1920x1080)" or "All Monitors (3840x2160)"
+            label = f"{monitor.name} ({monitor.width}x{monitor.height})"
+            if monitor.is_primary:
+                label += " [Primary]"
+            self.monitor_combo.addItem(label)
+
+            # Match saved monitor index
+            if monitor.index == saved_monitor:
+                selected_index = i
+
+        if self._monitors:
+            self.monitor_combo.setCurrentIndex(selected_index)
+
+        # Update enabled state based on checkbox
+        self.monitor_combo.setEnabled(self.screen_recording_check.isChecked())
+
+    def is_screen_recording_enabled(self) -> bool:
+        """Check if screen recording is enabled"""
+        return self.screen_recording_check.isChecked()
+
+    def get_selected_monitor_index(self) -> int:
+        """Get the selected monitor index"""
+        idx = self.monitor_combo.currentIndex()
+        if 0 <= idx < len(self._monitors):
+            return self._monitors[idx].index
+        return 0  # Default to first monitor

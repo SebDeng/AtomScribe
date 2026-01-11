@@ -51,6 +51,13 @@ class AppSignals(QObject):
     diarization_started = Signal()
     diarization_stopped = Signal()
 
+    # ===== Screen recording signals =====
+    screen_recording_started = Signal()
+    screen_recording_paused = Signal()
+    screen_recording_resumed = Signal()
+    screen_recording_stopped = Signal()
+    screen_recording_error = Signal(str)  # Error message
+
     # ===== Session signals =====
     session_created = Signal(str)  # session_id
     session_opened = Signal(str)
