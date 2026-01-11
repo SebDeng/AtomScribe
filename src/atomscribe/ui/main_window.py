@@ -314,16 +314,27 @@ class MainWindow(QMainWindow):
 
             # Apply screen recording settings from dialog
             screen_recording_enabled = dialog.is_screen_recording_enabled()
-            selected_monitor = dialog.get_selected_monitor_index()
+            capture_mode = dialog.get_capture_mode()
 
             self._recording_controller.set_screen_recording_enabled(screen_recording_enabled)
-            self._recording_controller.set_screen_recording_monitor(selected_monitor)
+
+            if capture_mode == "window":
+                # Window capture mode
+                window_handle = dialog.get_selected_window_handle()
+                window_title = dialog.get_selected_window_title()
+                self._recording_controller.set_screen_recording_window(window_handle, window_title)
+                logger.info(f"Screen recording: window mode, handle={window_handle}, title={window_title}")
+            else:
+                # Monitor capture mode
+                selected_monitor = dialog.get_selected_monitor_index()
+                self._recording_controller.set_screen_recording_monitor(selected_monitor)
+                logger.info(f"Screen recording: monitor mode, monitor={selected_monitor}")
 
             # Also update the recording bar toggle
             self.recording_bar.set_screen_recording_enabled(screen_recording_enabled)
 
             logger.info(f"Starting recording: {session_name} in {save_dir}")
-            logger.info(f"Screen recording: {'enabled' if screen_recording_enabled else 'disabled'}, monitor: {selected_monitor}")
+            logger.info(f"Screen recording: {'enabled' if screen_recording_enabled else 'disabled'}, mode: {capture_mode}")
 
             # Actually start recording
             success = self._recording_controller.start_recording(

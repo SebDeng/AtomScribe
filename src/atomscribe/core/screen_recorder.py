@@ -5,7 +5,7 @@ import threading
 import time
 import shutil
 from pathlib import Path
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Union
 from dataclasses import dataclass
 from enum import Enum
 from loguru import logger
@@ -21,6 +21,24 @@ try:
     import numpy as np
 except ImportError:
     np = None
+
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+    Image = None
+
+# Import capture backend and window manager
+from .capture_backend import (
+    CaptureBackend,
+    CaptureTarget,
+    CaptureType,
+    MonitorCaptureBackend,
+    WindowCaptureBackend,
+    create_capture_backend,
+)
+from . import window_manager
 
 
 class ScreenRecordingState(Enum):
@@ -69,6 +87,11 @@ class ScreenRecorder:
         self.monitor_index = monitor_index
         self.quality = quality
         self.codec = codec
+
+        # Window capture support
+        self._window_handle: Optional[int] = None
+        self._window_title: str = ""
+        self._capture_backend: Optional[CaptureBackend] = None
 
         self._state = ScreenRecordingState.IDLE
         self._output_path: Optional[Path] = None
@@ -176,6 +199,68 @@ class ScreenRecorder:
         self.quality = max(0, min(51, quality))
         logger.info(f"Set screen recording quality (CRF) to {self.quality}")
 
+    def set_window(self, window_handle: int, window_title: str = ""):
+        """Set a specific window to record instead of a monitor.
+
+        Args:
+            window_handle: Window handle (hwnd on Windows)
+            window_title: Window title for display purposes
+        """
+        self._window_handle = window_handle
+        self._window_title = window_title
+        logger.info(f"Set screen recording to window: {window_title} (handle={window_handle})")
+
+    def clear_window(self):
+        """Clear window selection, revert to monitor recording."""
+        self._window_handle = None
+        self._window_title = ""
+        logger.info("Cleared window selection, will record monitor")
+
+    @property
+    def is_window_capture(self) -> bool:
+        """Check if recording a specific window."""
+        return self._window_handle is not None
+
+    @property
+    def window_handle(self) -> Optional[int]:
+        """Get the current window handle."""
+        return self._window_handle
+
+    @staticmethod
+    def get_windows(exclude_own: bool = True) -> List["window_manager.WindowInfo"]:
+        """Get list of available windows for capture.
+
+        Args:
+            exclude_own: If True, exclude the current application's windows
+
+        Returns:
+            List of WindowInfo objects
+        """
+        return window_manager.get_windows(exclude_own)
+
+    @staticmethod
+    def capture_window_thumbnail(
+        window_handle: int,
+        max_width: int = 200,
+        max_height: int = 120
+    ) -> Optional[bytes]:
+        """Capture a thumbnail of a specific window.
+
+        Args:
+            window_handle: Window handle
+            max_width: Maximum thumbnail width
+            max_height: Maximum thumbnail height
+
+        Returns:
+            PNG image bytes, or None if failed
+        """
+        return window_manager.get_window_thumbnail(window_handle, max_width, max_height)
+
+    @staticmethod
+    def is_window_capture_available() -> bool:
+        """Check if window capture is available on this platform."""
+        return window_manager.is_window_capture_available()
+
     @staticmethod
     def get_monitors() -> List[MonitorInfo]:
         """Get list of available monitors"""
@@ -213,6 +298,75 @@ class ScreenRecorder:
 
         return monitors
 
+    @staticmethod
+    def capture_monitor_thumbnail(monitor_index: int, max_width: int = 200, max_height: int = 120) -> Optional[bytes]:
+        """
+        Capture a thumbnail screenshot of a specific monitor.
+
+        Args:
+            monitor_index: Monitor index (-1 for all monitors, 0+ for specific)
+            max_width: Maximum thumbnail width
+            max_height: Maximum thumbnail height
+
+        Returns:
+            PNG image bytes, or None if failed
+        """
+        if mss is None:
+            return None
+
+        try:
+            with mss.mss() as sct:
+                # Convert monitor index to mss index
+                if monitor_index == -1:
+                    mss_index = 0  # All monitors
+                else:
+                    mss_index = monitor_index + 1  # mss uses 1-based for individual monitors
+
+                if mss_index >= len(sct.monitors):
+                    logger.warning(f"Monitor index {monitor_index} not found")
+                    return None
+
+                # Capture screenshot
+                monitor = sct.monitors[mss_index]
+                screenshot = sct.grab(monitor)
+
+                # Calculate thumbnail size maintaining aspect ratio
+                width = screenshot.width
+                height = screenshot.height
+                aspect = width / height
+
+                if width > max_width:
+                    width = max_width
+                    height = int(width / aspect)
+
+                if height > max_height:
+                    height = max_height
+                    width = int(height * aspect)
+
+                # Convert to PNG using mss.tools
+                # First get raw PNG at full size
+                png_data = mss.tools.to_png(screenshot.rgb, screenshot.size)
+
+                # Use PIL/Pillow if available for resizing, otherwise return full size
+                try:
+                    from PIL import Image
+                    import io
+
+                    img = Image.open(io.BytesIO(png_data))
+                    img = img.resize((width, height), Image.Resampling.LANCZOS)
+
+                    output = io.BytesIO()
+                    img.save(output, format='PNG')
+                    return output.getvalue()
+                except ImportError:
+                    # Pillow not available, return full-size PNG
+                    logger.debug("Pillow not available, returning full-size thumbnail")
+                    return png_data
+
+        except Exception as e:
+            logger.error(f"Error capturing monitor thumbnail: {e}")
+            return None
+
     def _get_monitor_region(self) -> dict:
         """Get the region to capture based on monitor selection"""
         if mss is None:
@@ -238,9 +392,6 @@ class ScreenRecorder:
         Args:
             output_path: Output video file path (should be .mp4)
         """
-        if mss is None:
-            raise RuntimeError("mss not installed")
-
         if self._ffmpeg_path is None:
             raise RuntimeError("FFmpeg not found")
 
@@ -251,10 +402,33 @@ class ScreenRecorder:
         self._output_path = Path(output_path)
         self._output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Get monitor region
-        monitor = self._get_monitor_region()
-        width = monitor["width"]
-        height = monitor["height"]
+        # Create appropriate capture backend
+        if self._window_handle is not None:
+            # Window capture mode
+            if not window_manager.is_window_capture_available():
+                raise RuntimeError("Window capture not available on this platform")
+            if not window_manager.is_window_valid(self._window_handle):
+                raise RuntimeError(f"Window handle {self._window_handle} is not valid")
+
+            self._capture_backend = WindowCaptureBackend(
+                self._window_handle,
+                self._window_title
+            )
+            logger.info(f"Using window capture: {self._window_title}")
+        else:
+            # Monitor capture mode
+            if mss is None:
+                raise RuntimeError("mss not installed")
+
+            self._capture_backend = MonitorCaptureBackend(self.monitor_index)
+            logger.info(f"Using monitor capture: {self._capture_backend.get_name()}")
+
+        # Get capture region
+        region = self._capture_backend.get_region()
+        if region is None:
+            raise RuntimeError("Failed to get capture region")
+
+        x, y, width, height = region
 
         # Ensure dimensions are even (required by many codecs)
         width = width - (width % 2)
@@ -295,7 +469,7 @@ class ScreenRecorder:
             self._state = ScreenRecordingState.RECORDING
             self._capture_thread = threading.Thread(
                 target=self._capture_loop,
-                args=(monitor, width, height),
+                args=(width, height),
                 daemon=True,
             )
             self._capture_thread.start()
@@ -305,55 +479,76 @@ class ScreenRecorder:
         except Exception as e:
             logger.error(f"Failed to start screen recording: {e}")
             self._state = ScreenRecordingState.IDLE
+            self._capture_backend = None
             if self._on_error_callback:
                 self._on_error_callback(str(e))
             raise
 
-    def _capture_loop(self, monitor: dict, width: int, height: int):
+    def _capture_loop(self, width: int, height: int):
         """Main capture loop - runs in separate thread"""
         frame_interval = 1.0 / self.fps
+        backend = self._capture_backend
+
+        if backend is None:
+            logger.error("No capture backend available")
+            return
 
         try:
-            with mss.mss() as sct:
-                while not self._stop_event.is_set() and self._ffmpeg_process is not None:
-                    current_time = time.time()
+            while not self._stop_event.is_set() and self._ffmpeg_process is not None:
+                current_time = time.time()
 
-                    if self._state == ScreenRecordingState.RECORDING:
-                        # Capture frame
-                        try:
-                            screenshot = sct.grab(monitor)
+                if self._state == ScreenRecordingState.RECORDING:
+                    # Capture frame using backend
+                    try:
+                        # Check if target is still valid (especially for windows)
+                        if not backend.is_valid():
+                            logger.warning(f"Capture target no longer valid: {backend.get_name()}")
+                            if self._on_error_callback:
+                                self._on_error_callback("Capture target closed")
+                            break
 
-                            # Convert to raw bytes (BGRA format)
-                            frame_data = screenshot.raw
+                        frame = backend.capture_frame()
+                        if frame is None:
+                            # Skip this frame
+                            continue
 
-                            # Resize if needed to match expected dimensions
-                            if screenshot.width != width or screenshot.height != height:
-                                # Skip this frame if dimensions don't match
-                                logger.warning(f"Frame size mismatch: {screenshot.width}x{screenshot.height} vs {width}x{height}")
-                            else:
-                                # Write to FFmpeg - check stop conditions first
-                                ffmpeg_proc = self._ffmpeg_process
-                                if ffmpeg_proc and ffmpeg_proc.stdin and not self._stop_event.is_set():
-                                    try:
-                                        ffmpeg_proc.stdin.write(frame_data)
-                                    except (BrokenPipeError, OSError, ValueError) as e:
-                                        # ValueError can occur if stdin is closed
-                                        if not self._stop_event.is_set():
-                                            logger.debug(f"FFmpeg pipe closed: {e}")
-                                        break
-                                else:
-                                    # FFmpeg process gone or stopping
-                                    break
-                        except Exception as e:
-                            if not self._stop_event.is_set():
-                                logger.error(f"Error capturing frame: {e}")
+                        # Convert PIL Image to raw bytes (BGRA format for FFmpeg)
+                        # Resize if needed to match expected dimensions
+                        if frame.width != width or frame.height != height:
+                            frame = frame.resize((width, height), Image.Resampling.LANCZOS)
 
-                    # Calculate sleep time to maintain FPS
-                    elapsed = time.time() - current_time
-                    sleep_time = frame_interval - elapsed
-                    if sleep_time > 0:
-                        # Use event wait for interruptible sleep
-                        self._stop_event.wait(timeout=sleep_time)
+                        # Convert to BGRA bytes
+                        if frame.mode != 'RGBA':
+                            frame = frame.convert('RGBA')
+
+                        # Swap R and B channels (RGBA -> BGRA)
+                        r, g, b, a = frame.split()
+                        frame = Image.merge('RGBA', (b, g, r, a))
+                        frame_data = frame.tobytes()
+
+                        # Write to FFmpeg - check stop conditions first
+                        ffmpeg_proc = self._ffmpeg_process
+                        if ffmpeg_proc and ffmpeg_proc.stdin and not self._stop_event.is_set():
+                            try:
+                                ffmpeg_proc.stdin.write(frame_data)
+                            except (BrokenPipeError, OSError, ValueError) as e:
+                                # ValueError can occur if stdin is closed
+                                if not self._stop_event.is_set():
+                                    logger.debug(f"FFmpeg pipe closed: {e}")
+                                break
+                        else:
+                            # FFmpeg process gone or stopping
+                            break
+                    except Exception as e:
+                        if not self._stop_event.is_set():
+                            logger.error(f"Error capturing frame: {e}")
+
+                # Calculate sleep time to maintain FPS
+                elapsed = time.time() - current_time
+                sleep_time = frame_interval - elapsed
+                if sleep_time > 0:
+                    # Use event wait for interruptible sleep
+                    self._stop_event.wait(timeout=sleep_time)
 
         except Exception as e:
             if not self._stop_event.is_set():
@@ -439,6 +634,12 @@ class ScreenRecorder:
 
         self._state = ScreenRecordingState.IDLE
         self._capture_thread = None
+
+        # Clean up capture backend
+        if self._capture_backend:
+            if isinstance(self._capture_backend, MonitorCaptureBackend):
+                self._capture_backend.close()
+            self._capture_backend = None
 
         # Verify output file exists
         if self._output_path and self._output_path.exists():

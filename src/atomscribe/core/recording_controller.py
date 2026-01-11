@@ -475,8 +475,13 @@ class RecordingController(QObject):
         return self._screen_recorder.get_monitors()
 
     def set_screen_recording_monitor(self, monitor_index: int):
-        """Set the monitor to record"""
+        """Set the monitor to record (clears any window selection)"""
+        self._screen_recorder.clear_window()
         self._screen_recorder.set_monitor(monitor_index)
+
+    def set_screen_recording_window(self, window_handle: int, window_title: str = ""):
+        """Set a specific window to record instead of a monitor"""
+        self._screen_recorder.set_window(window_handle, window_title)
 
 
 # Singleton
