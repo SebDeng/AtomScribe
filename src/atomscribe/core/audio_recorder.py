@@ -46,6 +46,9 @@ class AudioRecorder:
     Supports pause/resume and real-time audio level monitoring.
     """
 
+    # Maximum duration to keep in buffer for diarization (seconds)
+    DIARIZATION_BUFFER_DURATION = 300  # 5 minutes
+
     def __init__(
         self,
         sample_rate: int = 44100,
@@ -73,6 +76,13 @@ class AudioRecorder:
 
         # Selected device
         self._device_index: Optional[int] = None
+
+        # Audio buffer for speaker diarization
+        # Stores recent audio chunks with timestamps for segment retrieval
+        self._diarization_buffer: List[np.ndarray] = []
+        self._diarization_buffer_lock = threading.Lock()
+        self._recording_start_samples: int = 0  # Total samples at recording start
+        self._total_samples_recorded: int = 0  # Running count of samples
 
     @property
     def state(self) -> RecordingState:
@@ -145,6 +155,11 @@ class AudioRecorder:
         self._output_path = Path(output_path)
         self._frames = []
 
+        # Reset diarization buffer
+        with self._diarization_buffer_lock:
+            self._diarization_buffer = []
+            self._total_samples_recorded = 0
+
         # If output is MP3, record to temporary WAV first
         if self._output_path.suffix.lower() == ".mp3" and convert_to_mp3:
             self._temp_wav_path = self._output_path.with_suffix(".temp.wav")
@@ -191,6 +206,16 @@ class AudioRecorder:
                 if self._wav_file:
                     self._wav_file.writeframes(indata.tobytes())
 
+            # Store audio in diarization buffer
+            with self._diarization_buffer_lock:
+                self._diarization_buffer.append(indata.copy())
+                self._total_samples_recorded += len(indata)
+
+                # Trim buffer if it exceeds max duration
+                max_samples = int(self.DIARIZATION_BUFFER_DURATION * self.sample_rate)
+                while self._get_buffer_samples() > max_samples and len(self._diarization_buffer) > 1:
+                    self._diarization_buffer.pop(0)
+
             # Calculate audio level for visualization
             if self._level_callback:
                 # RMS level normalized to 0-1
@@ -207,6 +232,10 @@ class AudioRecorder:
             # Send zero level when paused
             if self._level_callback:
                 self._level_callback(0.0)
+
+    def _get_buffer_samples(self) -> int:
+        """Get total samples in diarization buffer (call with lock held)"""
+        return sum(len(chunk) for chunk in self._diarization_buffer)
 
     def pause_recording(self):
         """Pause the recording"""
@@ -360,6 +389,62 @@ class AudioRecorder:
             except:
                 pass
         return 0.0
+
+    def get_audio_segment(self, start_time: float, end_time: float) -> Optional[np.ndarray]:
+        """
+        Get audio segment from buffer for speaker diarization.
+
+        Args:
+            start_time: Start time in seconds from recording start
+            end_time: End time in seconds from recording start
+
+        Returns:
+            Audio data as numpy array (int16), or None if not available
+        """
+        with self._diarization_buffer_lock:
+            if not self._diarization_buffer:
+                return None
+
+            # Calculate sample positions
+            start_sample = int(start_time * self.sample_rate)
+            end_sample = int(end_time * self.sample_rate)
+
+            # Calculate buffer start position (samples that have been trimmed)
+            total_buffer_samples = self._get_buffer_samples()
+            buffer_start_sample = self._total_samples_recorded - total_buffer_samples
+
+            # Check if requested segment is within buffer
+            if start_sample < buffer_start_sample:
+                logger.warning(f"Requested segment start {start_time}s is before buffer start")
+                start_sample = buffer_start_sample
+
+            if end_sample > self._total_samples_recorded:
+                logger.warning(f"Requested segment end {end_time}s is after buffer end")
+                end_sample = self._total_samples_recorded
+
+            if start_sample >= end_sample:
+                return None
+
+            # Concatenate buffer and extract segment
+            try:
+                full_buffer = np.concatenate(self._diarization_buffer)
+
+                # Convert to buffer-relative positions
+                rel_start = start_sample - buffer_start_sample
+                rel_end = end_sample - buffer_start_sample
+
+                # Ensure bounds are valid
+                rel_start = max(0, rel_start)
+                rel_end = min(len(full_buffer), rel_end)
+
+                if rel_start >= rel_end:
+                    return None
+
+                return full_buffer[rel_start:rel_end].copy()
+
+            except Exception as e:
+                logger.error(f"Error extracting audio segment: {e}")
+                return None
 
 
 # Singleton instance

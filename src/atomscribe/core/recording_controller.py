@@ -10,6 +10,7 @@ from .audio_recorder import get_audio_recorder, RecordingState
 from .config import get_config_manager
 from .transcriber import get_transcriber, TranscriptSegment
 from .llm_processor import get_llm_processor, CorrectionResult
+from .speaker_diarizer import get_speaker_diarizer, SpeakerResult, SPEECHBRAIN_AVAILABLE
 from ..signals import get_app_signals
 
 
@@ -46,6 +47,14 @@ class RecordingController(QObject):
         self._llm_processor = get_llm_processor()
         self._llm_enabled = True  # Can be toggled
 
+        # Get speaker diarizer for speaker identification
+        self._diarizer = get_speaker_diarizer(
+            num_speakers=config.diarization_num_speakers,
+            min_speakers=config.diarization_min_speakers,
+            max_speakers=config.diarization_max_speakers,
+        ) if SPEECHBRAIN_AVAILABLE else None
+        self._diarization_enabled = config.diarization_enabled
+
         self._current_session: Optional[Session] = None
         self._transcription_enabled = True
 
@@ -63,6 +72,11 @@ class RecordingController(QObject):
         # Connect LLM processor callbacks
         self._llm_processor.set_on_correction_callback(self._on_transcript_corrected)
         self._llm_processor.set_on_model_loaded_callback(self._on_llm_model_loaded)
+
+        # Connect speaker diarizer callbacks
+        if self._diarizer:
+            self._diarizer.set_on_speaker_callback(self._on_speaker_identified)
+            self._diarizer.set_on_model_loaded_callback(self._on_diarization_model_loaded)
 
         # Connect signals
         self._connect_signals()
@@ -113,6 +127,16 @@ class RecordingController(QObject):
             logger.info(f"Segment {segment.id} finalized, queueing for LLM correction")
             self._llm_processor.queue_segment(segment.id, segment.text)
 
+        # Queue for speaker diarization when segment is finalized
+        if not is_partial and self._diarization_enabled and self._diarizer and self._diarizer.is_running():
+            # Get audio segment from recorder buffer
+            audio_segment = self._audio_recorder.get_audio_segment(segment.start, segment.end)
+            if audio_segment is not None and len(audio_segment) > 0:
+                logger.info(f"Segment {segment.id} finalized, queueing for diarization")
+                self._diarizer.queue_segment(segment.id, audio_segment, segment.start, segment.end)
+            else:
+                logger.warning(f"Could not get audio for segment {segment.id} diarization")
+
     def _on_model_loaded(self):
         """Handle transcription model loaded"""
         self._signals.transcription_model_loaded.emit()
@@ -131,6 +155,21 @@ class RecordingController(QObject):
         self._signals.llm_model_loaded.emit()
         self._signals.status_message.emit("LLM model loaded", 2000)
         logger.info("LLM model loaded and ready")
+
+    def _on_speaker_identified(self, result: SpeakerResult):
+        """Handle speaker identification result"""
+        # Emit signal for UI update (now sends full SpeakerResult for multi-speaker support)
+        self._signals.speaker_identified.emit(result)
+        if result.has_multiple_speakers:
+            logger.info(f"Segment {result.segment_id}: {result.get_speaker_sequence()}")
+        else:
+            logger.debug(f"Segment {result.segment_id} assigned to {result.primary_speaker}")
+
+    def _on_diarization_model_loaded(self):
+        """Handle diarization model loaded"""
+        self._signals.diarization_model_loaded.emit()
+        self._signals.status_message.emit("Speaker diarization model loaded", 2000)
+        logger.info("Speaker diarization model loaded and ready")
 
     def is_configured(self) -> bool:
         """Check if the app is configured (has a save directory)"""
@@ -153,6 +192,13 @@ class RecordingController(QObject):
             logger.info("Preloading LLM model...")
             self._signals.status_message.emit("Loading LLM model...", 0)
             self._llm_processor.load_model(blocking=False)
+
+    def preload_diarization_model(self):
+        """Preload the speaker diarization model in background"""
+        if self._diarizer and not self._diarizer.is_model_loaded():
+            logger.info("Preloading speaker diarization model...")
+            self._signals.status_message.emit("Loading speaker diarization model...", 0)
+            self._diarizer.load_model(blocking=False)
 
     def start_recording(self, session_name: Optional[str] = None, save_directory: Optional[Path] = None) -> bool:
         """
@@ -192,6 +238,15 @@ class RecordingController(QObject):
                 logger.info("LLM post-processor started")
             else:
                 logger.warning("LLM post-processor NOT started (model not loaded or disabled)")
+
+            # Start speaker diarizer if enabled and model is loaded
+            logger.info(f"Diarization status: enabled={self._diarization_enabled}, diarizer={self._diarizer is not None}, model_loaded={self._diarizer.is_model_loaded() if self._diarizer else False}")
+            if self._diarization_enabled and self._diarizer and self._diarizer.is_model_loaded():
+                self._diarizer.start()
+                self._signals.diarization_started.emit()
+                logger.info("Speaker diarizer started")
+            else:
+                logger.warning("Speaker diarizer NOT started (model not loaded or disabled)")
 
             # Update session status
             self._current_session.set_status("recording")
@@ -243,6 +298,12 @@ class RecordingController(QObject):
                 self._llm_processor.stop()
                 self._signals.llm_processing_stopped.emit()
                 logger.info("LLM post-processor stopped")
+
+            # Stop speaker diarizer
+            if self._diarizer and self._diarizer.is_running():
+                self._diarizer.stop()
+                self._signals.diarization_stopped.emit()
+                logger.info("Speaker diarizer stopped")
 
             # Stop recording
             audio_path = self._audio_recorder.stop_recording()
@@ -311,6 +372,19 @@ class RecordingController(QObject):
     def is_llm_model_loaded(self) -> bool:
         """Check if LLM model is loaded"""
         return self._llm_processor.is_model_loaded()
+
+    def set_diarization_enabled(self, enabled: bool):
+        """Enable or disable speaker diarization"""
+        self._diarization_enabled = enabled
+        logger.info(f"Speaker diarization {'enabled' if enabled else 'disabled'}")
+
+    def is_diarization_enabled(self) -> bool:
+        """Check if speaker diarization is enabled"""
+        return self._diarization_enabled
+
+    def is_diarization_model_loaded(self) -> bool:
+        """Check if diarization model is loaded"""
+        return self._diarizer.is_model_loaded() if self._diarizer else False
 
 
 # Singleton

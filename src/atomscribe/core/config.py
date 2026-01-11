@@ -29,6 +29,12 @@ class AppConfig(BaseModel):
     # Format: {"wrong": "correct", ...}
     transcription_replacements: Optional[dict] = None
 
+    # Speaker diarization settings
+    diarization_enabled: bool = False  # Enable speaker diarization (disabled by default, code preserved)
+    diarization_num_speakers: Optional[int] = None  # None = auto-detect (2-4)
+    diarization_min_speakers: int = 2  # Minimum speakers for auto-detect
+    diarization_max_speakers: int = 4  # Maximum speakers for auto-detect
+
     # UI settings
     last_window_geometry: Optional[str] = None
     last_selected_device: Optional[str] = None

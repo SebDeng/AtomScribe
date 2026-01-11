@@ -44,6 +44,13 @@ class AppSignals(QObject):
     llm_processing_started = Signal()
     llm_processing_stopped = Signal()
 
+    # ===== Speaker diarization signals =====
+    speaker_identified = Signal(object)  # SpeakerResult object (supports multi-speaker segments)
+    speaker_updated = Signal(object)  # Re-assignment after re-clustering
+    diarization_model_loaded = Signal()
+    diarization_started = Signal()
+    diarization_stopped = Signal()
+
     # ===== Session signals =====
     session_created = Signal(str)  # session_id
     session_opened = Signal(str)

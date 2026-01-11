@@ -22,6 +22,8 @@ class CorrectionResult:
     original_text: str
     corrected_text: str
     is_corrected: bool  # True if text was modified
+    merge_with_previous: bool = False  # True if should merge with previous segment
+    merged_text: str = ""  # Combined text if merge_with_previous is True
 
 
 class LLMPostProcessor:
@@ -47,6 +49,18 @@ Rules:
 4. Keep scientific/technical terms accurate
 5. Output ONLY the corrected text, nothing else
 6. If no correction needed, output the original text exactly"""
+
+    # System prompt for context-aware merge checking
+    MERGE_CHECK_PROMPT = """You are a transcript merge checker. Given two consecutive transcript segments, determine if they should be merged into one sentence.
+
+Rules:
+1. Answer "MERGE" if the second segment clearly continues the first (incomplete sentence)
+2. Answer "NO" if they are separate complete thoughts
+3. If MERGE, provide the combined corrected text on the next line
+4. Common merge cases:
+   - First ends with incomplete phrase: "I think the" + "problem is here" → MERGE
+   - First ends mid-sentence without punctuation: "Let's see how" + "this works" → MERGE
+5. Do NOT merge if both are complete sentences"""
 
     def __init__(
         self,
@@ -86,6 +100,10 @@ Rules:
         self._batch_delay = 2.0  # Wait this long before processing (to batch segments)
         self._pending_segments: List[tuple] = []  # (segment_id, text)
         self._last_segment_time = 0.0
+
+        # Context history for merge checking
+        self._segment_history: List[tuple] = []  # [(segment_id, corrected_text), ...] last N segments
+        self._max_history = 3  # Keep last N segments for context
 
     def set_on_correction_callback(self, callback: Callable[[CorrectionResult], None]):
         """Set callback for when a segment is corrected"""
@@ -167,6 +185,7 @@ Rules:
         self._running = True
         self._pending_segments = []
         self._last_segment_time = 0.0
+        self._segment_history = []  # Clear history on start
 
         # Clear queue
         while not self._queue.empty():
@@ -242,17 +261,38 @@ Rules:
 
         for segment_id, text in segments:
             try:
+                # First, correct the text
                 corrected = self._correct_text(text)
+
+                # Check if should merge with previous segment
+                merge_with_previous = False
+                merged_text = ""
+
+                if self._segment_history:
+                    prev_id, prev_text = self._segment_history[-1]
+                    should_merge, combined = self._check_merge(prev_text, corrected)
+
+                    if should_merge and combined:
+                        merge_with_previous = True
+                        merged_text = combined
+                        logger.info(f"Merge suggested: segment {prev_id} + {segment_id}")
 
                 result = CorrectionResult(
                     segment_id=segment_id,
                     original_text=text,
                     corrected_text=corrected,
                     is_corrected=(corrected != text),
+                    merge_with_previous=merge_with_previous,
+                    merged_text=merged_text,
                 )
 
                 if self._on_correction_callback:
                     self._on_correction_callback(result)
+
+                # Update history
+                self._segment_history.append((segment_id, corrected))
+                if len(self._segment_history) > self._max_history:
+                    self._segment_history.pop(0)
 
                 if result.is_corrected:
                     logger.debug(f"Corrected segment {segment_id}: '{text[:30]}...' -> '{corrected[:30]}...'")
@@ -298,6 +338,74 @@ Correct this transcript:
         except Exception as e:
             logger.error(f"LLM inference error: {e}")
             return text
+
+    def _check_merge(self, prev_text: str, curr_text: str) -> tuple:
+        """
+        Check if current segment should be merged with previous.
+
+        Args:
+            prev_text: Previous segment's corrected text
+            curr_text: Current segment's corrected text
+
+        Returns:
+            (should_merge: bool, merged_text: str)
+        """
+        if not self._model:
+            return False, ""
+
+        # Quick heuristic check first - skip LLM if obviously not a merge case
+        prev_stripped = prev_text.rstrip()
+
+        # If previous ends with strong punctuation, likely complete
+        if prev_stripped and prev_stripped[-1] in '.!?。！？':
+            # But check if current starts with lowercase (continuation hint)
+            curr_stripped = curr_text.lstrip()
+            if curr_stripped and curr_stripped[0].isupper():
+                return False, ""
+
+        # If previous is very short or current is very short, check for merge
+        # Otherwise skip (too expensive to call LLM for every pair)
+        if len(prev_text) > 100 and len(curr_text) > 50:
+            return False, ""
+
+        prompt = f"""<|im_start|>system
+{self.MERGE_CHECK_PROMPT}<|im_end|>
+<|im_start|>user
+Segment 1: {prev_text}
+Segment 2: {curr_text}
+
+Should these be merged?<|im_end|>
+<|im_start|>assistant
+"""
+
+        try:
+            response = self._model(
+                prompt,
+                max_tokens=len(prev_text) + len(curr_text) + 50,
+                temperature=0.1,
+                top_p=0.9,
+                stop=["<|im_end|>", "<|im_start|>"],
+                echo=False,
+            )
+
+            result = response["choices"][0]["text"].strip()
+
+            if result.startswith("MERGE"):
+                # Extract merged text from response
+                lines = result.split('\n')
+                if len(lines) > 1:
+                    merged = '\n'.join(lines[1:]).strip()
+                    if merged:
+                        return True, merged
+
+                # Fallback: simple concatenation
+                return True, f"{prev_text.rstrip()} {curr_text.lstrip()}"
+
+            return False, ""
+
+        except Exception as e:
+            logger.error(f"Merge check error: {e}")
+            return False, ""
 
     def is_model_loaded(self) -> bool:
         """Check if model is loaded"""

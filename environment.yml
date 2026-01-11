@@ -15,3 +15,8 @@ dependencies:
     - pydub>=0.25.1
     - faster-whisper>=1.0.0  # Real-time speech-to-text
     - llama-cpp-python>=0.2.0  # LLM post-processing (install with CUDA: CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python)
+    - speechbrain>=1.0.2  # Speaker diarization (ECAPA-TDNN embeddings) - needs 1.0.2+ for torchaudio 2.1+ compat
+    - scikit-learn>=1.3.0  # Clustering for speaker diarization
+    - torchaudio>=2.0.0  # Audio processing for SpeechBrain
+    - requests>=2.28.0  # Required by SpeechBrain for model downloading
+    - huggingface_hub<0.22  # SpeechBrain 1.0.x compatibility (use_auth_token deprecation)

@@ -7,7 +7,7 @@ import numpy as np
 from pathlib import Path
 from queue import Queue, Empty
 from typing import Optional, List, Dict, Callable
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from loguru import logger
 
 try:
@@ -15,6 +15,15 @@ try:
 except ImportError:
     WhisperModel = None
     logger.warning("faster-whisper not installed. Transcription will not work.")
+
+
+@dataclass
+class Word:
+    """A single word with timing information"""
+    word: str
+    start: float  # seconds from recording start
+    end: float
+    probability: Optional[float] = None
 
 
 @dataclass
@@ -27,6 +36,8 @@ class TranscriptSegment:
     language: Optional[str] = None
     confidence: Optional[float] = None
     is_partial: bool = False  # True if this is an interim result that may be updated
+    speaker: Optional[str] = None  # Speaker label (e.g., "Speaker A", "Speaker B")
+    words: List["Word"] = field(default_factory=list)  # Word-level timestamps for conversation splitting
 
 
 class RealtimeTranscriber:
@@ -58,10 +69,10 @@ class RealtimeTranscriber:
 
     # Gap threshold (seconds) to start a new paragraph/segment
     # Longer gap = more natural paragraphs, shorter = more segments
-    PARAGRAPH_GAP_THRESHOLD = 2.0
+    PARAGRAPH_GAP_THRESHOLD = 1.0
 
     # Silence timeout (seconds) - finalize segment if no new words for this duration
-    SILENCE_TIMEOUT = 2.0
+    SILENCE_TIMEOUT = 1.2
 
     # Default scientific vocabulary for electron microscopy
     DEFAULT_SCIENTIFIC_PROMPT = (
@@ -614,6 +625,14 @@ class RealtimeTranscriber:
 
             is_last_word = (i == len(words) - 1)
 
+            # Create Word object for this word
+            word_obj = Word(
+                word=word_text,
+                start=word_start_time,
+                end=word_end_time,
+                probability=word.probability if hasattr(word, 'probability') else None,
+            )
+
             if self._current_streaming_segment is None:
                 # Create new streaming segment
                 self._current_streaming_segment = TranscriptSegment(
@@ -624,6 +643,7 @@ class RealtimeTranscriber:
                     language=language,
                     confidence=confidence,
                     is_partial=True,
+                    words=[word_obj],  # Initialize with first word
                 )
                 self._segment_counter += 1
 
@@ -645,6 +665,7 @@ class RealtimeTranscriber:
 
                 self._current_streaming_segment.text = current_text
                 self._current_streaming_segment.end = word_end_time
+                self._current_streaming_segment.words.append(word_obj)  # Add word to list
 
                 # Emit update
                 if self._on_segment_update_callback:

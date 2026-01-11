@@ -59,6 +59,9 @@ class MainWindow(QMainWindow):
         # Preload LLM model in background (after transcription model starts loading)
         QTimer.singleShot(1000, self._preload_llm_model)
 
+        # Preload diarization model in background (after LLM model starts loading)
+        QTimer.singleShot(1500, self._preload_diarization_model)
+
     def _setup_window(self):
         """Configure window properties"""
         self.setWindowTitle("AI Lab Scribe")
@@ -508,6 +511,14 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning(f"Failed to preload LLM model: {e}")
             # Non-fatal - LLM correction will be disabled if model not available
+
+    def _preload_diarization_model(self):
+        """Preload the speaker diarization model in background"""
+        try:
+            self._recording_controller.preload_diarization_model()
+        except Exception as e:
+            logger.warning(f"Failed to preload diarization model: {e}")
+            # Non-fatal - diarization will be disabled if model not available
 
     def closeEvent(self, event):
         """Handle window close"""
