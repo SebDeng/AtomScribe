@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, Slot
 from .session import Session, get_session_manager
 from .audio_recorder import get_audio_recorder, RecordingState
 from .screen_recorder import get_screen_recorder, ScreenRecordingState
+from .input_recorder import get_input_recorder, is_input_recording_available, InputEvent
 from .config import get_config_manager
 from .transcriber import get_transcriber, TranscriptSegment
 from .llm_processor import get_llm_processor, CorrectionResult
@@ -67,6 +68,15 @@ class RecordingController(QObject):
         ) if SPEECHBRAIN_AVAILABLE else None
         self._diarization_enabled = config.diarization_enabled
 
+        # Get input recorder for keyboard/mouse events
+        self._input_recorder = get_input_recorder(
+            record_mouse_moves=config.input_recording_mouse_moves,
+            record_mouse_clicks=config.input_recording_mouse_clicks,
+            record_mouse_scroll=config.input_recording_mouse_scroll,
+            record_keyboard=config.input_recording_keyboard,
+        ) if is_input_recording_available() else None
+        self._input_recording_enabled = config.input_recording_enabled
+
         self._current_session: Optional[Session] = None
         self._transcription_enabled = True
 
@@ -89,6 +99,10 @@ class RecordingController(QObject):
         if self._diarizer:
             self._diarizer.set_on_speaker_callback(self._on_speaker_identified)
             self._diarizer.set_on_model_loaded_callback(self._on_diarization_model_loaded)
+
+        # Connect input recorder callbacks
+        if self._input_recorder:
+            self._input_recorder.set_on_event_callback(self._on_input_event)
 
         # Connect screen recorder callbacks
         self._screen_recorder.set_on_error_callback(self._on_screen_recording_error)
@@ -192,6 +206,11 @@ class RecordingController(QObject):
         self._signals.status_message.emit(f"Screen recording error: {error}", 5000)
         logger.error(f"Screen recording error: {error}")
 
+    def _on_input_event(self, event: InputEvent):
+        """Handle input event from keyboard/mouse recorder"""
+        # Emit signal for UI update (optional, can be used for visualization)
+        self._signals.input_event_recorded.emit(event)
+
     def is_configured(self) -> bool:
         """Check if the app is configured (has a save directory)"""
         return self._config.get_default_save_directory() is not None
@@ -286,6 +305,23 @@ class RecordingController(QObject):
                 else:
                     logger.warning("Screen recording NOT started (dependencies not available)")
 
+            # Start input recording (keyboard/mouse) if enabled and available
+            logger.info(f"Input recording status: enabled={self._input_recording_enabled}, available={self._input_recorder is not None}")
+            if self._input_recording_enabled and self._input_recorder:
+                try:
+                    events_path = self._current_session.get_events_path()
+                    self._input_recorder.start(output_path=events_path)
+                    self._signals.input_recording_started.emit()
+                    logger.info(f"Input recording started: {events_path}")
+                except Exception as e:
+                    logger.error(f"Failed to start input recording: {e}")
+                    self._signals.status_message.emit(f"Input recording failed: {str(e)}", 5000)
+            else:
+                if not self._input_recording_enabled:
+                    logger.info("Input recording disabled in config")
+                else:
+                    logger.warning("Input recording NOT started (pynput not available)")
+
             # Update session status
             self._current_session.set_status("recording")
 
@@ -307,6 +343,11 @@ class RecordingController(QObject):
                 self._screen_recorder.pause_recording()
                 self._signals.screen_recording_paused.emit()
 
+            # Pause input recording
+            if self._input_recorder and self._input_recorder.is_recording:
+                self._input_recorder.pause()
+                self._signals.input_recording_paused.emit()
+
             if self._current_session:
                 self._current_session.set_status("paused")
             logger.info("Recording paused")
@@ -320,6 +361,11 @@ class RecordingController(QObject):
             if self._screen_recorder.is_paused:
                 self._screen_recorder.resume_recording()
                 self._signals.screen_recording_resumed.emit()
+
+            # Resume input recording
+            if self._input_recorder and self._input_recorder.is_paused:
+                self._input_recorder.resume()
+                self._signals.input_recording_resumed.emit()
 
             if self._current_session:
                 self._current_session.set_status("recording")
@@ -355,6 +401,13 @@ class RecordingController(QObject):
                 self._signals.diarization_stopped.emit()
                 logger.info("Speaker diarizer stopped")
 
+            # Stop input recording
+            input_events = []
+            if self._input_recorder and self._input_recorder.state.value != "idle":
+                input_events = self._input_recorder.stop()
+                self._signals.input_recording_stopped.emit()
+                logger.info(f"Input recording stopped with {len(input_events)} events")
+
             # Stop screen recording
             video_path = None
             if self._screen_recorder.state != ScreenRecordingState.IDLE:
@@ -383,6 +436,8 @@ class RecordingController(QObject):
                 self._current_session.metadata.audio_file = str(audio_path) if audio_path else None
                 self._current_session.metadata.video_file = str(video_path) if video_path else None
                 self._current_session.metadata.transcript_file = str(self._current_session.get_transcript_path())
+                if input_events:
+                    self._current_session.metadata.events_file = str(self._current_session.get_events_path())
                 self._current_session.set_status("completed")
 
                 session_dir = self._current_session.directory
@@ -482,6 +537,19 @@ class RecordingController(QObject):
     def set_screen_recording_window(self, window_handle: int, window_title: str = ""):
         """Set a specific window to record instead of a monitor"""
         self._screen_recorder.set_window(window_handle, window_title)
+
+    def set_input_recording_enabled(self, enabled: bool):
+        """Enable or disable input recording"""
+        self._input_recording_enabled = enabled
+        logger.info(f"Input recording {'enabled' if enabled else 'disabled'}")
+
+    def is_input_recording_enabled(self) -> bool:
+        """Check if input recording is enabled"""
+        return self._input_recording_enabled
+
+    def is_input_recording_available(self) -> bool:
+        """Check if input recording is available (pynput installed)"""
+        return self._input_recorder is not None
 
 
 # Singleton

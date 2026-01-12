@@ -23,3 +23,4 @@ dependencies:
     - mss>=9.0.0  # Screen capture for screen recording
     - pywin32>=306; sys_platform == 'win32'  # Window capture on Windows
     - Pillow>=10.0.0  # Image processing for window thumbnails
+    - pynput>=1.7.6  # Keyboard/mouse input recording

@@ -58,6 +58,13 @@ class AppSignals(QObject):
     screen_recording_stopped = Signal()
     screen_recording_error = Signal(str)  # Error message
 
+    # ===== Input recording signals (keyboard/mouse) =====
+    input_recording_started = Signal()
+    input_recording_paused = Signal()
+    input_recording_resumed = Signal()
+    input_recording_stopped = Signal()
+    input_event_recorded = Signal(object)  # InputEvent object
+
     # ===== Session signals =====
     session_created = Signal(str)  # session_id
     session_opened = Signal(str)

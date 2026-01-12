@@ -42,6 +42,13 @@ class AppConfig(BaseModel):
     screen_recording_quality: int = 23  # FFmpeg CRF value (0-51, lower = better quality, 23 = default)
     screen_recording_codec: str = "libx264"  # Video codec (libx264 for compatibility, libx265 for better compression)
 
+    # Input recording settings (keyboard/mouse)
+    input_recording_enabled: bool = True  # Enable input recording by default
+    input_recording_keyboard: bool = True  # Record keyboard events
+    input_recording_mouse_clicks: bool = True  # Record mouse clicks
+    input_recording_mouse_scroll: bool = False  # Record mouse scroll (usually not needed)
+    input_recording_mouse_moves: bool = False  # Record mouse movement (generates lots of data)
+
     # UI settings
     last_window_geometry: Optional[str] = None
     last_selected_device: Optional[str] = None
