@@ -448,6 +448,19 @@ class RecordingController(QObject):
                     f"Recording saved to {session_dir.name}", 3000
                 )
 
+                # Check if document generation should be triggered
+                config = self._config.config
+                if config.doc_generation_enabled:
+                    # Emit signal to trigger document generation dialog
+                    # Keep reference to session before clearing
+                    completed_session = self._current_session
+                    self._current_session = None
+
+                    # Request document generation (UI will show dialog)
+                    logger.info("Requesting document generation for completed session")
+                    self._signals.doc_generation_requested.emit(completed_session)
+                    return audio_path
+
             self._current_session = None
             return audio_path
 

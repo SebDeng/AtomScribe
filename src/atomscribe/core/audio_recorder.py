@@ -74,6 +74,9 @@ class AudioRecorder:
         # Callback for raw audio data (for transcription)
         self._audio_data_callback: Optional[Callable[[np.ndarray], None]] = None
 
+        # Callback for video muxing (raw PCM data for screen recorder)
+        self._video_audio_callback: Optional[Callable[[bytes], None]] = None
+
         # Selected device
         self._device_index: Optional[int] = None
 

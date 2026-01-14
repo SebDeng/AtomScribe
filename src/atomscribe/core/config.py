@@ -49,6 +49,19 @@ class AppConfig(BaseModel):
     input_recording_mouse_scroll: bool = False  # Record mouse scroll (usually not needed)
     input_recording_mouse_moves: bool = False  # Record mouse movement (generates lots of data)
 
+    # Document generation settings
+    doc_generation_enabled: bool = True  # Enable document generation
+    doc_generation_show_dialog: bool = True  # Show mode selection dialog after recording
+    doc_generation_default_mode: str = "training"  # "training" | "experiment_log"
+
+    # VLM server settings (llama.cpp server with Qwen3-VL-8B)
+    vlm_server_url: str = "http://localhost:8080"  # llama-server address
+    vlm_server_port: int = 8080  # Port for auto-started llama-server
+    vlm_model_path: Optional[str] = None  # Path to Qwen3-VL-8B GGUF (auto-detected if None)
+    vlm_mmproj_path: Optional[str] = None  # Path to vision encoder GGUF (auto-detected if None)
+    vlm_auto_start_server: bool = True  # Auto-start llama-server when needed
+    vlm_gpu_layers: int = 99  # Number of layers to offload to GPU (-1 = all)
+
     # UI settings
     last_window_geometry: Optional[str] = None
     last_selected_device: Optional[str] = None

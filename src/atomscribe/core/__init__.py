@@ -6,6 +6,13 @@ from .audio_recorder import AudioRecorder, AudioDevice, RecordingState, get_audi
 from .recording_controller import RecordingController, get_recording_controller
 from .transcriber import RealtimeTranscriber, TranscriptSegment, get_transcriber
 
+# Document generation
+from .doc_generator import DocumentGenerator, GenerationMode, get_document_generator
+from .transcript_analyzer import TranscriptAnalyzer, KeyPoint, KeyPointType, create_transcript_analyzer
+from .frame_extractor import FrameExtractor, ExtractedFrame, create_frame_extractor
+from .vlm_processor import VLMProcessor, CropRegion, get_vlm_processor
+from .markdown_writer import MarkdownWriter, ImageReference, create_markdown_writer
+
 __all__ = [
     "AppConfig",
     "ConfigManager",
@@ -23,4 +30,21 @@ __all__ = [
     "RealtimeTranscriber",
     "TranscriptSegment",
     "get_transcriber",
+    # Document generation
+    "DocumentGenerator",
+    "GenerationMode",
+    "get_document_generator",
+    "TranscriptAnalyzer",
+    "KeyPoint",
+    "KeyPointType",
+    "create_transcript_analyzer",
+    "FrameExtractor",
+    "ExtractedFrame",
+    "create_frame_extractor",
+    "VLMProcessor",
+    "CropRegion",
+    "get_vlm_processor",
+    "MarkdownWriter",
+    "ImageReference",
+    "create_markdown_writer",
 ]

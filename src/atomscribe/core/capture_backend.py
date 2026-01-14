@@ -85,7 +85,11 @@ class CaptureBackend(ABC):
 
 
 class MonitorCaptureBackend(CaptureBackend):
-    """Capture backend for monitors using mss."""
+    """Capture backend for monitors using mss.
+
+    Note: mss is not thread-safe. We create a new mss context for each capture
+    to ensure it works correctly when called from different threads.
+    """
 
     def __init__(self, monitor_index: int):
         """Initialize monitor capture.
@@ -94,38 +98,40 @@ class MonitorCaptureBackend(CaptureBackend):
             monitor_index: Monitor index (0, 1, 2... or -1 for all monitors)
         """
         self._monitor_index = monitor_index
-        self._sct: Optional[mss.mss] = None
+        self._mss_index: int = 0
         self._monitor_info: Optional[dict] = None
+        self._initialized = False
 
         if HAS_MSS:
-            self._init_capture()
+            self._init_monitor_info()
 
-    def _init_capture(self):
-        """Initialize mss capture context."""
+    def _init_monitor_info(self):
+        """Initialize monitor info (but not the mss context - that's per-capture)."""
         try:
-            self._sct = mss.mss()
+            # Create temporary mss context just to get monitor info
+            with mss.mss() as sct:
+                # Get monitor info
+                if self._monitor_index == -1:
+                    # All monitors combined
+                    self._mss_index = 0
+                else:
+                    # Specific monitor (mss uses 1-based indexing)
+                    self._mss_index = self._monitor_index + 1
 
-            # Get monitor info
-            if self._monitor_index == -1:
-                # All monitors combined
-                self._mss_index = 0
-            else:
-                # Specific monitor (mss uses 1-based indexing)
-                self._mss_index = self._monitor_index + 1
+                # Validate index
+                if self._mss_index >= len(sct.monitors):
+                    logger.warning(f"Monitor index {self._monitor_index} out of range, using 0")
+                    self._mss_index = 1
+                    self._monitor_index = 0
 
-            # Validate index
-            if self._mss_index >= len(self._sct.monitors):
-                logger.warning(f"Monitor index {self._monitor_index} out of range, using 0")
-                self._mss_index = 1
-                self._monitor_index = 0
-
-            self._monitor_info = self._sct.monitors[self._mss_index]
-            logger.debug(f"Monitor capture initialized: {self._monitor_info}")
+                self._monitor_info = dict(sct.monitors[self._mss_index])
+                self._initialized = True
+                logger.debug(f"Monitor capture initialized: {self._monitor_info}")
 
         except Exception as e:
             logger.error(f"Failed to initialize monitor capture: {e}")
-            self._sct = None
             self._monitor_info = None
+            self._initialized = False
 
     def get_region(self) -> Optional[Tuple[int, int, int, int]]:
         """Get the monitor region."""
@@ -140,28 +146,33 @@ class MonitorCaptureBackend(CaptureBackend):
         )
 
     def capture_frame(self) -> Optional[Image.Image]:
-        """Capture a frame from the monitor."""
-        if not self._sct or not HAS_PIL:
+        """Capture a frame from the monitor.
+
+        Creates a new mss context for each capture to ensure thread safety.
+        """
+        if not HAS_MSS or not HAS_PIL or not self._monitor_info:
             return None
 
         try:
-            # Capture the monitor
-            screenshot = self._sct.grab(self._monitor_info)
+            # Create new mss context for this capture (thread-safe)
+            with mss.mss() as sct:
+                # Capture the monitor
+                screenshot = sct.grab(self._monitor_info)
 
-            # Convert to PIL Image (RGB)
-            return Image.frombytes(
-                "RGB",
-                (screenshot.width, screenshot.height),
-                screenshot.rgb,
-            )
+                # Convert to PIL Image (RGB)
+                return Image.frombytes(
+                    "RGB",
+                    (screenshot.width, screenshot.height),
+                    screenshot.rgb,
+                )
 
         except Exception as e:
             logger.error(f"Failed to capture monitor frame: {e}")
             return None
 
     def is_valid(self) -> bool:
-        """Monitors are always valid (unless mss fails)."""
-        return self._sct is not None and self._monitor_info is not None
+        """Monitors are always valid (unless initialization failed)."""
+        return self._initialized and self._monitor_info is not None
 
     def get_name(self) -> str:
         """Get monitor name."""
@@ -170,13 +181,8 @@ class MonitorCaptureBackend(CaptureBackend):
         return f"Monitor {self._monitor_index + 1}"
 
     def close(self):
-        """Clean up mss context."""
-        if self._sct:
-            try:
-                self._sct.close()
-            except Exception:
-                pass
-            self._sct = None
+        """Clean up (no-op since we use context managers now)."""
+        pass
 
 
 class WindowCaptureBackend(CaptureBackend):

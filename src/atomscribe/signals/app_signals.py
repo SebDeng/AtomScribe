@@ -65,6 +65,14 @@ class AppSignals(QObject):
     input_recording_stopped = Signal()
     input_event_recorded = Signal(object)  # InputEvent object
 
+    # ===== Document generation signals =====
+    doc_generation_requested = Signal(object)  # Session object - triggers mode selection dialog
+    doc_generation_started = Signal(str)  # mode: "training" | "experiment_log"
+    doc_generation_progress = Signal(int, int, str)  # (current, total, description)
+    doc_generation_completed = Signal(str)  # path to generated markdown
+    doc_generation_cancelled = Signal()
+    doc_generation_error = Signal(str)  # error message
+
     # ===== Session signals =====
     session_created = Signal(str)  # session_id
     session_opened = Signal(str)

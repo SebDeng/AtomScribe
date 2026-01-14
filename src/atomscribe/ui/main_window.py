@@ -20,6 +20,7 @@ from loguru import logger
 from ..signals import get_app_signals
 from ..core.config import get_config_manager
 from ..core.recording_controller import get_recording_controller
+from ..core.doc_generator import get_document_generator, GenerationMode
 from .widgets.sidebar import SidebarWidget
 from .widgets.realtime_panel import RealtimePanel
 from .widgets.preview_panel import PreviewPanel
@@ -254,6 +255,9 @@ class MainWindow(QMainWindow):
 
         # Recording time updates
         signals.recording_time_updated.connect(self._on_recording_time_updated)
+
+        # Document generation
+        signals.doc_generation_requested.connect(self._handle_doc_generation_requested)
 
     def _check_first_run(self):
         """Check if this is the first run and show setup dialog"""
@@ -544,6 +548,53 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning(f"Failed to preload diarization model: {e}")
             # Non-fatal - diarization will be disabled if model not available
+
+    @Slot(object)
+    def _handle_doc_generation_requested(self, session):
+        """Handle document generation request after recording stops."""
+        from .dialogs.generation_mode_dialog import GenerationModeDialog
+        from .dialogs.generation_progress_dialog import GenerationProgressDialog
+
+        logger.info(f"Document generation requested for session: {session.metadata.name}")
+
+        config = self._config.config
+
+        # Check if we should show the dialog or use saved preference
+        if config.doc_generation_show_dialog:
+            # Show mode selection dialog
+            dialog = GenerationModeDialog(self)
+            dialog.mode_selected.connect(
+                lambda mode, remember: self._start_document_generation(session, mode)
+            )
+
+            result = dialog.exec()
+            if result != QDialog.Accepted:
+                logger.info("Document generation skipped by user")
+                return
+        else:
+            # Use default mode from config
+            mode_str = config.doc_generation_default_mode
+            mode = GenerationMode(mode_str) if mode_str in ["training", "experiment_log"] else GenerationMode.TRAINING
+            self._start_document_generation(session, mode)
+
+    def _start_document_generation(self, session, mode: GenerationMode):
+        """Start document generation with progress dialog."""
+        from .dialogs.generation_progress_dialog import GenerationProgressDialog
+
+        logger.info(f"Starting document generation: mode={mode.value}")
+
+        # Get document generator
+        doc_gen = get_document_generator()
+
+        # Create and show progress dialog
+        progress_dialog = GenerationProgressDialog(self)
+        progress_dialog.cancel_requested.connect(doc_gen.cancel)
+
+        # Start generation
+        doc_gen.generate_async(session, mode)
+
+        # Show progress dialog (non-blocking)
+        progress_dialog.show()
 
     def closeEvent(self, event):
         """Handle window close"""
