@@ -1,6 +1,13 @@
 # Project specific
 docs/
 claude.md
+CLAUDE.md
+*.tmp.*
+
+# Claude Code artifacts
+.claude/
+nul
+=*
 
 # Python
 __pycache__/
@@ -67,3 +74,9 @@ htmlcov/
 
 # LLM Models (large files)
 models/*.gguf
+
+# Claude API testing (experimental, not for production)
+src/atomscribe/core/claude_backend.py
+tests/test_claude*.py
+scripts/test_claude*.py
+.env.claude

@@ -8,11 +8,13 @@ from .transcriber import RealtimeTranscriber, TranscriptSegment, get_transcriber
 from .click_screenshotter import ClickScreenshotter
 
 # Document generation
-from .doc_generator import DocumentGenerator, GenerationMode, get_document_generator
+from .doc_generator import DocumentGenerator, GenerationMode, get_document_generator, reset_document_generator
 from .transcript_analyzer import TranscriptAnalyzer, KeyPoint, KeyPointType, create_transcript_analyzer
 from .frame_extractor import FrameExtractor, ExtractedFrame, create_frame_extractor
 from .vlm_processor import VLMProcessor, CropRegion, get_vlm_processor
 from .markdown_writer import MarkdownWriter, ImageReference, create_markdown_writer
+from .claude_analyzer import ClaudeTranscriptAnalyzer, create_claude_analyzer, is_claude_available
+from .claude_vision import ClaudeVisionProcessor, get_claude_vision_processor, is_claude_vision_available
 
 __all__ = [
     "AppConfig",
@@ -36,6 +38,7 @@ __all__ = [
     "DocumentGenerator",
     "GenerationMode",
     "get_document_generator",
+    "reset_document_generator",
     "TranscriptAnalyzer",
     "KeyPoint",
     "KeyPointType",
@@ -49,4 +52,11 @@ __all__ = [
     "MarkdownWriter",
     "ImageReference",
     "create_markdown_writer",
+    # Claude integration
+    "ClaudeTranscriptAnalyzer",
+    "create_claude_analyzer",
+    "is_claude_available",
+    "ClaudeVisionProcessor",
+    "get_claude_vision_processor",
+    "is_claude_vision_available",
 ]

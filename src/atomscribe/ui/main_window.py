@@ -25,6 +25,7 @@ from .widgets.sidebar import SidebarWidget
 from .widgets.realtime_panel import RealtimePanel
 from .widgets.preview_panel import PreviewPanel
 from .widgets.recording_bar import RecordingBar
+from .dialogs import SettingsDialog
 
 
 class MainWindow(QMainWindow):
@@ -510,8 +511,8 @@ class MainWindow(QMainWindow):
 
     def _on_settings_clicked(self):
         """Handle settings button click"""
-        # TODO: Show settings dialog
-        self.signals.status_message.emit("Settings dialog (coming soon)", 2000)
+        dialog = SettingsDialog(self)
+        dialog.exec()
 
     def _on_about_clicked(self):
         """Handle about button click"""

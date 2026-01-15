@@ -28,6 +28,16 @@ from .frame_extractor import FrameExtractor, create_frame_extractor, ExtractedFr
 from .vlm_processor import VLMProcessor, get_vlm_processor, CropRegion
 from .markdown_writer import MarkdownWriter, ImageReference, create_markdown_writer
 from .config import get_config_manager
+from .claude_analyzer import (
+    ClaudeTranscriptAnalyzer,
+    create_claude_analyzer,
+    is_claude_available,
+)
+from .claude_vision import (
+    ClaudeVisionProcessor,
+    get_claude_vision_processor,
+    is_claude_vision_available,
+)
 
 from ..signals import get_app_signals
 
@@ -53,33 +63,60 @@ class DocumentGenerator:
 
     Orchestrates the full pipeline:
     Session → Transcript Analysis → Frame Extraction → VLM Processing → Markdown
+
+    Supports two LLM backends:
+    - Claude API (preferred when API key is configured)
+    - Local Qwen3-4B LLM (fallback)
     """
 
     def __init__(
         self,
-        use_vlm: bool = True,
+        use_vlm: Optional[bool] = None,
         vlm_server_url: Optional[str] = None,
+        use_claude: Optional[bool] = None,
     ):
         """Initialize document generator.
 
         Args:
-            use_vlm: Whether to use VLM for smart cropping
+            use_vlm: Whether to use VLM for smart cropping (uses config if None)
             vlm_server_url: URL of VLM server (uses config if None)
+            use_claude: Whether to use Claude API for analysis.
+                       If None, auto-detect based on API key availability.
         """
         config = get_config_manager().config
 
-        self.use_vlm = use_vlm
+        # Use config preference for VLM if not specified
+        self.use_vlm = use_vlm if use_vlm is not None else config.use_vlm_for_smart_crop
         self.vlm_server_url = vlm_server_url or config.vlm_server_url
+
+        # Auto-detect Claude availability if not specified
+        if use_claude is None:
+            # Check config preference and API key availability
+            self.use_claude = config.use_claude_for_docs and is_claude_available()
+        else:
+            self.use_claude = use_claude and is_claude_available()
+
+        if self.use_claude:
+            logger.info("Document generator will use Claude API")
+        else:
+            logger.info("Document generator will use local LLM")
 
         self._signals = get_app_signals()
         self._cancelled = False
         self._running = False
         self._worker_thread: Optional[threading.Thread] = None
 
+        # Use Claude for vision (smart cropping) when using Claude for docs
+        self.use_claude_vision = self.use_claude and is_claude_vision_available()
+        if self.use_claude_vision:
+            logger.info("Document generator will use Claude for vision/cropping")
+
         # Components (created during generation)
         self._transcript_analyzer: Optional[TranscriptAnalyzer] = None
+        self._claude_analyzer: Optional[ClaudeTranscriptAnalyzer] = None
         self._frame_extractor: Optional[FrameExtractor] = None
         self._vlm_processor: Optional[VLMProcessor] = None
+        self._claude_vision: Optional[ClaudeVisionProcessor] = None
         self._markdown_writer: Optional[MarkdownWriter] = None
 
         # Progress callback
@@ -180,32 +217,46 @@ class DocumentGenerator:
             self._signals.doc_generation_error.emit("Transcript file not found")
             return None
 
-        # Create transcript analyzer (using existing LLM if available)
-        self._transcript_analyzer = create_transcript_analyzer()
+        # Create transcript analyzer - use Claude if available, otherwise local LLM
+        if self.use_claude:
+            self._claude_analyzer = create_claude_analyzer()
+            if self._claude_analyzer:
+                logger.info("Using Claude API for transcript analysis")
+                analyzer = self._claude_analyzer
+            else:
+                logger.warning("Claude analyzer creation failed, falling back to local LLM")
+                self._transcript_analyzer = create_transcript_analyzer()
+                analyzer = self._transcript_analyzer
+        else:
+            self._transcript_analyzer = create_transcript_analyzer()
+            analyzer = self._transcript_analyzer
 
-        # Try to share LLM model with the post-processor
-        try:
-            from .llm_processor import get_llm_processor
-            llm_proc = get_llm_processor()
-            if llm_proc.is_model_loaded() and llm_proc._model:
-                self._transcript_analyzer.set_model(llm_proc._model)
-                logger.info("Sharing LLM model with transcript analyzer")
-        except Exception as e:
-            logger.debug(f"Could not share LLM model: {e}")
+            # Try to share LLM model with the post-processor (only for local LLM)
+            try:
+                from .llm_processor import get_llm_processor
+                llm_proc = get_llm_processor()
+                if llm_proc.is_model_loaded() and llm_proc._model:
+                    self._transcript_analyzer.set_model(llm_proc._model)
+                    logger.info("Sharing LLM model with transcript analyzer")
+            except Exception as e:
+                logger.debug(f"Could not share LLM model: {e}")
 
-        transcript_data = self._transcript_analyzer.load_transcript(transcript_path)
+        transcript_data = analyzer.load_transcript(transcript_path)
         if not transcript_data:
             logger.error("Failed to load transcript")
             self._signals.doc_generation_error.emit("Failed to load transcript")
             return None
 
-        self._emit_progress(10, 100, "Analyzing transcript...")
+        if self.use_claude and self._claude_analyzer:
+            self._emit_progress(10, 100, "Analyzing transcript with Claude...")
+        else:
+            self._emit_progress(10, 100, "Analyzing transcript...")
 
         if self._cancelled:
             return None
 
         # Analyze transcript to extract key points
-        key_points = self._transcript_analyzer.analyze_with_llm(
+        key_points = analyzer.analyze_with_llm(
             transcript_data,
             progress_callback=lambda c, t, d: self._emit_progress(
                 10 + int((c / t) * 20), 100, d
@@ -243,11 +294,19 @@ class DocumentGenerator:
             logger.warning(f"Video file not found: {video_path}")
             self._frame_extractor = None
 
-        # Phase 4: Setup VLM processor (will auto-start llama-server if needed)
-        if self.use_vlm:
+        # Phase 4: Setup vision processor (Claude vision or local VLM)
+        if self.use_claude_vision:
+            # Use Claude for vision analysis (no local server needed)
+            self._emit_progress(38, 100, "Setting up Claude vision...")
+            self._claude_vision = get_claude_vision_processor()
+            if self._claude_vision:
+                logger.info("Using Claude for vision/smart cropping")
+            else:
+                logger.warning("Claude vision not available")
+        elif self.use_vlm:
+            # Fall back to local VLM (will auto-start llama-server)
             self._emit_progress(38, 100, "Starting VLM server (this may take a minute)...")
             self._vlm_processor = get_vlm_processor(self.vlm_server_url)
-            # ensure_available() will auto-start the server if model files are present
             if not self._vlm_processor.ensure_available():
                 logger.warning("VLM server not available, using fallback cropping")
                 self._vlm_processor = None
@@ -285,31 +344,79 @@ class DocumentGenerator:
             return None
 
         # Phase 6: Generate markdown document
-        self._emit_progress(85, 100, "Generating markdown document...")
-
         self._markdown_writer = create_markdown_writer(session.directory)
 
         title = session.metadata.name or "Recording Session"
         duration = transcript_data.total_duration or session.metadata.duration_seconds
 
-        if mode == GenerationMode.TRAINING:
-            content = self._markdown_writer.generate_training_document(
+        # Try Claude for enhanced document generation if available
+        content = None
+        if self.use_claude and self._claude_analyzer:
+            self._emit_progress(85, 100, "Generating document with Claude...")
+            content = self._claude_analyzer.enhance_document(
                 key_points=key_points,
+                mode=mode.value,
                 title=title,
                 duration=duration,
                 images=images_dict,
+                progress_callback=lambda c, t, d: self._emit_progress(
+                    85 + int((c / t) * 10), 100, d
+                ),
             )
-        else:
-            content = self._markdown_writer.generate_experiment_log(
-                key_points=key_points,
-                title=title,
-                duration=duration,
-                images=images_dict,
-            )
+            if content:
+                logger.info("Document generated with Claude enhancement")
 
-        self._emit_progress(95, 100, "Writing document...")
+        # Fallback to template-based generation
+        if not content:
+            self._emit_progress(85, 100, "Generating markdown document...")
+            if mode == GenerationMode.TRAINING:
+                content = self._markdown_writer.generate_training_document(
+                    key_points=key_points,
+                    title=title,
+                    duration=duration,
+                    images=images_dict,
+                )
+            else:
+                content = self._markdown_writer.generate_experiment_log(
+                    key_points=key_points,
+                    title=title,
+                    duration=duration,
+                    images=images_dict,
+                )
+
+        self._emit_progress(92, 100, "Writing document...")
 
         output_path = self._markdown_writer.write_document(content)
+
+        # Generate bilingual version if Claude is available
+        translated_path = None
+        if self.use_claude and self._claude_analyzer and content:
+            self._emit_progress(94, 100, "Detecting language...")
+
+            # Detect language and translate to the other
+            detected_lang = self._claude_analyzer.detect_language(content)
+            target_lang = "en" if detected_lang == "zh" else "zh"
+            lang_suffix = "_en" if target_lang == "en" else "_zh"
+
+            self._emit_progress(95, 100, f"Generating {target_lang.upper()} version...")
+
+            translated = self._claude_analyzer.translate_document(
+                content=content,
+                target_language=target_lang,
+                progress_callback=lambda c, t, d: self._emit_progress(
+                    95 + int((c / t) * 4), 100, d
+                ),
+            )
+
+            if translated:
+                # Write translated version
+                translated_filename = output_path.stem + lang_suffix + output_path.suffix
+                translated_path = output_path.parent / translated_filename
+
+                with open(translated_path, "w", encoding="utf-8") as f:
+                    f.write(translated)
+
+                logger.info(f"Translated document generated: {translated_path}")
 
         # Update session metadata
         session.metadata.summary_file = str(output_path)
@@ -421,6 +528,9 @@ class DocumentGenerator:
         cropped_dir = frames_dir / "cropped"
         cropped_dir.mkdir(exist_ok=True)
 
+        # Get the vision processor (Claude or local VLM)
+        vision_processor = self._claude_vision or self._vlm_processor
+
         # Determine what frames to extract
         if kp.needs_comparison:
             # Extract before/after frames
@@ -435,12 +545,13 @@ class DocumentGenerator:
             )
 
             if before_frame and after_frame:
-                # Try VLM change detection
-                if self._vlm_processor:
-                    change_result = self._vlm_processor.detect_changes(
+                # Try vision-based change detection
+                if vision_processor:
+                    change_result = vision_processor.detect_changes(
                         before_frame.image_path,
                         after_frame.image_path,
                         kp.text,
+                        mouse_position=mouse_pos,
                     )
 
                     if change_result.changed_region and change_result.is_significant:
@@ -448,12 +559,12 @@ class DocumentGenerator:
                         before_cropped = cropped_dir / f"before_{idx:04d}.jpg"
                         after_cropped = cropped_dir / f"after_{idx:04d}.jpg"
 
-                        self._vlm_processor.crop_image(
+                        vision_processor.crop_image(
                             before_frame.image_path,
                             change_result.changed_region,
                             before_cropped,
                         )
-                        self._vlm_processor.crop_image(
+                        vision_processor.crop_image(
                             after_frame.image_path,
                             change_result.changed_region,
                             after_cropped,
@@ -476,7 +587,7 @@ class DocumentGenerator:
                             after_frame.image_path, "After", f"After step {idx + 1}"
                         )
                 else:
-                    # No VLM, use full frames
+                    # No vision processor, use full frames
                     result["before"] = self._create_image_ref(
                         before_frame.image_path, "Before", f"Before step {idx + 1}"
                     )
@@ -492,16 +603,16 @@ class DocumentGenerator:
             )
 
             if frame:
-                if self._vlm_processor:
-                    # Smart crop using VLM
-                    crop_region = self._vlm_processor.smart_crop(
+                if vision_processor:
+                    # Smart crop using vision processor
+                    crop_region = vision_processor.smart_crop(
                         frame.image_path,
                         context=kp.text,
                         mouse_position=mouse_pos,
                     )
 
                     cropped_path = cropped_dir / f"crop_{idx:04d}.jpg"
-                    if self._vlm_processor.crop_image(
+                    if vision_processor.crop_image(
                         frame.image_path, crop_region, cropped_path
                     ):
                         result["main"] = self._create_image_ref(
@@ -562,20 +673,35 @@ _generator_instance: Optional[DocumentGenerator] = None
 def get_document_generator(
     use_vlm: bool = True,
     vlm_server_url: Optional[str] = None,
+    use_claude: Optional[bool] = None,
+    force_new: bool = False,
 ) -> DocumentGenerator:
     """Get the singleton document generator instance.
 
     Args:
         use_vlm: Whether to use VLM for smart cropping
         vlm_server_url: Optional VLM server URL
+        use_claude: Whether to use Claude API (auto-detect if None)
+        force_new: If True, create a new instance even if one exists
 
     Returns:
         DocumentGenerator instance
     """
     global _generator_instance
-    if _generator_instance is None:
+    if _generator_instance is None or force_new:
         _generator_instance = DocumentGenerator(
             use_vlm=use_vlm,
             vlm_server_url=vlm_server_url,
+            use_claude=use_claude,
         )
     return _generator_instance
+
+
+def reset_document_generator():
+    """Reset the singleton document generator.
+
+    Call this when settings change (e.g., API key updated).
+    """
+    global _generator_instance
+    _generator_instance = None
+    logger.info("Document generator reset")

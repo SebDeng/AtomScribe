@@ -58,6 +58,11 @@ class AppConfig(BaseModel):
     doc_generation_show_dialog: bool = True  # Show mode selection dialog after recording
     doc_generation_default_mode: str = "training"  # "training" | "experiment_log"
 
+    # Claude API settings (for document generation)
+    anthropic_api_key: Optional[str] = None  # User's Anthropic API key
+    use_claude_for_docs: bool = True  # Use Claude API for document generation when API key is available
+    use_vlm_for_smart_crop: bool = True  # Use local VLM for smart screenshot cropping (separate from Claude)
+
     # VLM server settings (llama.cpp server with Qwen3-VL-8B)
     vlm_server_url: str = "http://localhost:8080"  # llama-server address
     vlm_server_port: int = 8080  # Port for auto-started llama-server
@@ -157,6 +162,15 @@ class ConfigManager:
     def is_first_run(self) -> bool:
         """Check if this is the first run"""
         return self._config.is_first_run
+
+    def get_anthropic_api_key(self) -> Optional[str]:
+        """Get the Anthropic API key"""
+        return self._config.anthropic_api_key
+
+    def set_anthropic_api_key(self, api_key: Optional[str]):
+        """Set the Anthropic API key"""
+        self._config.anthropic_api_key = api_key
+        self.save()
 
 
 def get_config_manager() -> ConfigManager:
