@@ -9,6 +9,7 @@ from .session import Session, get_session_manager
 from .audio_recorder import get_audio_recorder, RecordingState
 from .screen_recorder import get_screen_recorder, ScreenRecordingState
 from .input_recorder import get_input_recorder, is_input_recording_available, InputEvent
+from .click_screenshotter import ClickScreenshotter
 from .config import get_config_manager
 from .transcriber import get_transcriber, TranscriptSegment
 from .llm_processor import get_llm_processor, CorrectionResult
@@ -76,6 +77,11 @@ class RecordingController(QObject):
             record_keyboard=config.input_recording_keyboard,
         ) if is_input_recording_available() else None
         self._input_recording_enabled = config.input_recording_enabled
+
+        # Click screenshot settings
+        self._click_screenshot_enabled = config.click_screenshot_enabled
+        self._click_screenshot_quality = config.click_screenshot_quality
+        self._click_screenshotter: Optional[ClickScreenshotter] = None
 
         self._current_session: Optional[Session] = None
         self._transcription_enabled = True
@@ -296,6 +302,24 @@ class RecordingController(QObject):
                     self._screen_recorder.start_recording(video_path)
                     self._signals.screen_recording_started.emit()
                     logger.info(f"Screen recording started: {video_path}")
+
+                    # Setup click screenshotter if enabled (reuses screen recorder's capture backend)
+                    if self._click_screenshot_enabled and self._input_recorder:
+                        capture_backend = self._screen_recorder._capture_backend
+                        if capture_backend:
+                            clicks_dir = self._current_session.get_clicks_directory()
+                            self._click_screenshotter = ClickScreenshotter(
+                                output_dir=clicks_dir,
+                                capture_backend=capture_backend,
+                                quality=self._click_screenshot_quality,
+                            )
+                            self._input_recorder.set_click_screenshot_callback(
+                                self._click_screenshotter.capture
+                            )
+                            logger.info(f"Click screenshotter enabled: {clicks_dir}")
+                        else:
+                            logger.warning("No capture backend available for click screenshots")
+
                 except Exception as e:
                     logger.error(f"Failed to start screen recording: {e}")
                     self._signals.status_message.emit(f"Screen recording failed: {str(e)}", 5000)
@@ -407,6 +431,17 @@ class RecordingController(QObject):
                 input_events = self._input_recorder.stop()
                 self._signals.input_recording_stopped.emit()
                 logger.info(f"Input recording stopped with {len(input_events)} events")
+
+            # Stop click screenshotter (wait for pending captures before stopping screen recorder)
+            if self._click_screenshotter:
+                logger.info("Waiting for pending click screenshots...")
+                self._click_screenshotter.shutdown()
+                click_count = self._click_screenshotter.click_count
+                logger.info(f"Click screenshotter stopped with {click_count} screenshots")
+                self._click_screenshotter = None
+                # Clear the callback
+                if self._input_recorder:
+                    self._input_recorder.set_click_screenshot_callback(None)
 
             # Stop screen recording
             video_path = None

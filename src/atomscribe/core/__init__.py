@@ -5,6 +5,7 @@ from .session import Session, SessionMetadata, SessionManager, get_session_manag
 from .audio_recorder import AudioRecorder, AudioDevice, RecordingState, get_audio_recorder
 from .recording_controller import RecordingController, get_recording_controller
 from .transcriber import RealtimeTranscriber, TranscriptSegment, get_transcriber
+from .click_screenshotter import ClickScreenshotter
 
 # Document generation
 from .doc_generator import DocumentGenerator, GenerationMode, get_document_generator
@@ -30,6 +31,7 @@ __all__ = [
     "RealtimeTranscriber",
     "TranscriptSegment",
     "get_transcriber",
+    "ClickScreenshotter",
     # Document generation
     "DocumentGenerator",
     "GenerationMode",

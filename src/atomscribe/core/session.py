@@ -169,6 +169,15 @@ class Session:
         """Get the path for the events file."""
         return self.directory / "events.json"
 
+    def get_clicks_directory(self) -> Path:
+        """Get the directory for click screenshots.
+
+        Creates the directory if it doesn't exist.
+        """
+        clicks_dir = self.directory / "clicks"
+        clicks_dir.mkdir(parents=True, exist_ok=True)
+        return clicks_dir
+
     def update_duration(self, seconds: int):
         """Update the recording duration (saves to disk every 10 seconds)"""
         self.metadata.duration_seconds = seconds

@@ -30,6 +30,143 @@ except ImportError:
     HAS_MSS = False
     mss = None
 
+# Platform-specific imports for cursor capture
+import sys
+if sys.platform == "win32":
+    try:
+        import win32gui
+        import win32ui
+        import ctypes
+        HAS_WIN32_CURSOR = True
+    except ImportError:
+        HAS_WIN32_CURSOR = False
+else:
+    HAS_WIN32_CURSOR = False
+
+
+def _draw_cursor_on_image_win32(
+    img: "Image.Image",
+    region_x: int,
+    region_y: int
+) -> "Image.Image":
+    """Draw the mouse cursor on the captured image (Windows only).
+
+    Args:
+        img: The captured image
+        region_x: Left coordinate of the captured region
+        region_y: Top coordinate of the captured region
+
+    Returns:
+        Image with cursor drawn on it
+    """
+    if not HAS_WIN32_CURSOR or not HAS_PIL:
+        return img
+
+    try:
+        # Get cursor position
+        cursor_x, cursor_y = win32gui.GetCursorPos()
+
+        # Calculate cursor position relative to captured region
+        rel_x = cursor_x - region_x
+        rel_y = cursor_y - region_y
+
+        # Check if cursor is within the image bounds
+        if rel_x < 0 or rel_y < 0 or rel_x >= img.width or rel_y >= img.height:
+            return img  # Cursor not in captured region
+
+        # Get cursor info
+        cursor_info = win32gui.GetCursorInfo()
+        # cursor_info: (flags, hCursor, (x, y))
+        if cursor_info[0] == 0:  # Cursor is hidden
+            return img
+
+        hcursor = cursor_info[1]
+
+        # Get cursor icon info
+        icon_info = win32gui.GetIconInfo(hcursor)
+        # icon_info: (fIcon, xHotspot, yHotspot, hbmMask, hbmColor)
+        hotspot_x = icon_info[1]
+        hotspot_y = icon_info[2]
+        hbm_mask = icon_info[3]
+        hbm_color = icon_info[4]
+
+        # Get cursor size (typically 32x32)
+        cursor_size = 32
+
+        # Create a DC for cursor capture
+        screen_dc = win32gui.GetDC(0)
+        mem_dc = win32ui.CreateDCFromHandle(screen_dc)
+        save_dc = mem_dc.CreateCompatibleDC()
+
+        # Create bitmap for cursor
+        cursor_bitmap = win32ui.CreateBitmap()
+        cursor_bitmap.CreateCompatibleBitmap(mem_dc, cursor_size, cursor_size)
+        save_dc.SelectObject(cursor_bitmap)
+
+        # Fill with transparent background (magenta for transparency)
+        save_dc.FillSolidRect((0, 0, cursor_size, cursor_size), 0xFF00FF)
+
+        # Draw the cursor
+        win32gui.DrawIconEx(
+            save_dc.GetSafeHdc(),
+            0, 0,
+            hcursor,
+            cursor_size, cursor_size,
+            0, None,
+            3  # DI_NORMAL
+        )
+
+        # Convert cursor bitmap to PIL
+        bmpinfo = cursor_bitmap.GetInfo()
+        bmpstr = cursor_bitmap.GetBitmapBits(True)
+
+        cursor_img = Image.frombuffer(
+            'RGB',
+            (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
+            bmpstr, 'raw', 'BGRX', 0, 1
+        )
+
+        # Cleanup cursor DC
+        win32gui.DeleteObject(cursor_bitmap.GetHandle())
+        save_dc.DeleteDC()
+        mem_dc.DeleteDC()
+        win32gui.ReleaseDC(0, screen_dc)
+
+        # Cleanup icon bitmaps
+        if hbm_mask:
+            win32gui.DeleteObject(hbm_mask)
+        if hbm_color:
+            win32gui.DeleteObject(hbm_color)
+
+        # Create mask from magenta background
+        cursor_rgba = cursor_img.convert('RGBA')
+        pixels = cursor_rgba.load()
+        for y in range(cursor_rgba.height):
+            for x in range(cursor_rgba.width):
+                r, g, b, a = pixels[x, y]
+                if r > 240 and g < 20 and b > 240:  # Magenta
+                    pixels[x, y] = (0, 0, 0, 0)  # Transparent
+                else:
+                    pixels[x, y] = (r, g, b, 255)  # Opaque
+
+        # Paste cursor onto image at correct position (accounting for hotspot)
+        paste_x = rel_x - hotspot_x
+        paste_y = rel_y - hotspot_y
+
+        # Convert main image to RGBA if needed
+        if img.mode != 'RGBA':
+            img = img.convert('RGBA')
+
+        # Paste with alpha compositing
+        img.paste(cursor_rgba, (paste_x, paste_y), cursor_rgba)
+
+        # Convert back to RGB
+        return img.convert('RGB')
+
+    except Exception as e:
+        logger.debug(f"Failed to draw cursor: {e}")
+        return img
+
 
 class CaptureType(Enum):
     """Type of capture target."""
@@ -149,6 +286,7 @@ class MonitorCaptureBackend(CaptureBackend):
         """Capture a frame from the monitor.
 
         Creates a new mss context for each capture to ensure thread safety.
+        Includes cursor overlay on Windows.
         """
         if not HAS_MSS or not HAS_PIL or not self._monitor_info:
             return None
@@ -160,11 +298,21 @@ class MonitorCaptureBackend(CaptureBackend):
                 screenshot = sct.grab(self._monitor_info)
 
                 # Convert to PIL Image (RGB)
-                return Image.frombytes(
+                img = Image.frombytes(
                     "RGB",
                     (screenshot.width, screenshot.height),
                     screenshot.rgb,
                 )
+
+                # Draw cursor on the image (Windows only)
+                if sys.platform == "win32":
+                    img = _draw_cursor_on_image_win32(
+                        img,
+                        self._monitor_info["left"],
+                        self._monitor_info["top"]
+                    )
+
+                return img
 
         except Exception as e:
             logger.error(f"Failed to capture monitor frame: {e}")

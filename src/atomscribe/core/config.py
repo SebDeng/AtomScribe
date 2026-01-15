@@ -37,7 +37,7 @@ class AppConfig(BaseModel):
 
     # Screen recording settings
     screen_recording_enabled: bool = True  # Enable screen recording by default
-    screen_recording_fps: int = 10  # Frames per second (10 recommended for UI recording)
+    screen_recording_fps: int = 5  # Frames per second (5 for better sync, 10 may drop frames)
     screen_recording_monitor: int = 0  # Monitor index (0 = primary, -1 = all monitors)
     screen_recording_quality: int = 23  # FFmpeg CRF value (0-51, lower = better quality, 23 = default)
     screen_recording_codec: str = "libx264"  # Video codec (libx264 for compatibility, libx265 for better compression)
@@ -48,6 +48,10 @@ class AppConfig(BaseModel):
     input_recording_mouse_clicks: bool = True  # Record mouse clicks
     input_recording_mouse_scroll: bool = False  # Record mouse scroll (usually not needed)
     input_recording_mouse_moves: bool = False  # Record mouse movement (generates lots of data)
+
+    # Click screenshot settings (capture screen on mouse click)
+    click_screenshot_enabled: bool = True  # Enable click screenshots by default
+    click_screenshot_quality: int = 85  # JPEG quality (1-100)
 
     # Document generation settings
     doc_generation_enabled: bool = True  # Enable document generation

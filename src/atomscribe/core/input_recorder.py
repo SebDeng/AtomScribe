@@ -80,6 +80,9 @@ class InputEvent:
     # Context
     active_window: Optional[str] = None  # Active window title
 
+    # Screenshot (for mouse clicks with click_screenshot enabled)
+    screenshot_path: Optional[str] = None  # Relative path to click screenshot
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         result = {
@@ -106,6 +109,8 @@ class InputEvent:
             result["key_code"] = self.key_code
         if self.active_window is not None:
             result["active_window"] = self.active_window
+        if self.screenshot_path is not None:
+            result["screenshot_path"] = self.screenshot_path
 
         return result
 
@@ -161,6 +166,9 @@ class InputRecorder:
         # Callback for events (optional)
         self._on_event_callback: Optional[Callable[[InputEvent], None]] = None
 
+        # Callback for click screenshots (called on mouse press)
+        self._on_click_screenshot: Optional[Callable[[float, int, int], Optional[str]]] = None
+
         # Write buffer
         self._write_buffer: List[InputEvent] = []
         self._write_interval: float = 5.0  # Write to disk every 5 seconds
@@ -186,6 +194,17 @@ class InputRecorder:
     def set_on_event_callback(self, callback: Optional[Callable[[InputEvent], None]]):
         """Set callback for input events."""
         self._on_event_callback = callback
+
+    def set_click_screenshot_callback(
+        self,
+        callback: Optional[Callable[[float, int, int], Optional[str]]]
+    ):
+        """Set callback for capturing screenshots on mouse click.
+
+        The callback receives (timestamp, x, y) and should return the
+        relative path to the saved screenshot, or None if capture failed.
+        """
+        self._on_click_screenshot = callback
 
     def _get_active_window_title(self) -> Optional[str]:
         """Get the title of the currently active window."""
@@ -252,14 +271,26 @@ class InputRecorder:
         # Convert button to string
         button_name = button.name if hasattr(button, 'name') else str(button)
 
+        # Get timestamp first
+        timestamp = self._get_timestamp()
+
+        # Capture screenshot on mouse press (not release)
+        screenshot_path = None
+        if pressed and self._on_click_screenshot:
+            try:
+                screenshot_path = self._on_click_screenshot(timestamp, x, y)
+            except Exception as e:
+                logger.error(f"Click screenshot callback failed: {e}")
+
         event = InputEvent(
-            timestamp=self._get_timestamp(),
+            timestamp=timestamp,
             event_type=InputEventType.MOUSE_CLICK,
             x=x,
             y=y,
             button=button_name,
             pressed=pressed,
             active_window=self._get_active_window_title(),
+            screenshot_path=screenshot_path,
         )
         self._add_event(event)
         logger.debug(f"Mouse {'click' if pressed else 'release'}: ({x}, {y}) {button_name}")
